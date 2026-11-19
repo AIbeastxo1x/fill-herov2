@@ -104,6 +104,26 @@
     <p class="help" id="smtp-msg"></p>
   </section>
 
+  <section class="card" id="contacts-card" hidden>
+    <h2>Consented contacts</h2>
+    <p class="help">Campaign emails go only to people on this list. Each import must say where and when they agreed to be contacted. Addresses found on websites are not used for campaigns.</p>
+    <p class="help" id="contacts-summary"></p>
+    <label>Contacts, one per line: <code>email</code> or <code>email, name</code>
+      <textarea id="k-list" rows="6" placeholder="jane@company.com, Jane Smith"></textarea>
+    </label>
+    <label>Where they agreed to be contacted
+      <input id="k-source" type="text" placeholder="e.g. website newsletter sign-up form">
+    </label>
+    <label>Date they agreed
+      <input id="k-date" type="date">
+    </label>
+    <div class="row wrap">
+      <button id="import-contacts" class="primary">Import contacts</button>
+      <button id="clear-contacts" class="danger">Clear contact list</button>
+    </div>
+    <p class="help" id="contacts-msg"></p>
+  </section>
+
   <section class="card" id="campaign-card" hidden>
     <h2>Email campaign</h2>
     <p class="help" id="campaign-config"></p>
@@ -121,7 +141,7 @@
     </div>
     <p class="help" id="campaign-help"></p>
     <table class="report"><tbody>
-      <tr><td>Addresses waiting</td><td class="num" id="c-recipients"></td></tr>
+      <tr><td>Consented contacts waiting</td><td class="num" id="c-recipients"></td></tr>
       <tr><td>Emails sent</td><td class="num" id="c-sent"></td></tr>
       <tr><td>Failed</td><td class="num" id="c-failed"></td></tr>
       <tr><td>On the do-not-email list</td><td class="num" id="c-suppressed"></td></tr>

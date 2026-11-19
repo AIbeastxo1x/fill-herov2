@@ -69,6 +69,32 @@ function parseAddresses(text) {
   return [...new Set(found)];
 }
 
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+
+// One contact per line: "email" or "email, name". Lines that are not an email are reported back.
+function parseContactLines(text) {
+  const valid = [];
+  const invalid = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const [first, ...rest] = line.split(",");
+    const email = first.trim().toLowerCase();
+    if (!EMAIL_RE.test(email) || email.length > 254) {
+      invalid.push(line.slice(0, 100));
+      continue;
+    }
+    valid.push({ email, name: rest.join(",").trim().slice(0, 200) });
+  }
+  return { valid, invalid };
+}
+
+function validConsentDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value && d.getTime() <= Date.now() + 86400000;
+}
+
 // Relay settings from the page. The password is never returned, only whether one is saved.
 function smtpView(store, campaigns, env = process.env) {
   const s = store.get().smtp;
@@ -241,6 +267,62 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
     } catch (err) {
       next(err);
     }
+  });
+
+  // ---------- consented contacts ----------
+
+  app.get("/api/contacts", (req, res) => {
+    const contacts = store.get().contacts;
+    const bySource = {};
+    for (const c of contacts) bySource[c.consentSource] = (bySource[c.consentSource] ?? 0) + 1;
+    res.json({
+      count: contacts.length,
+      bySource: Object.entries(bySource).map(([source, count]) => ({ source, count })),
+    });
+  });
+
+  // Every contact must say where and when consent was given. Without both, nothing is imported.
+  app.post("/api/contacts/import", (req, res, next) => {
+    try {
+      const { text, consentSource, consentDate } = req.body ?? {};
+      if (typeof text !== "string" || text.length > 500000) throw httpError(400, "list must be text, up to 500 KB");
+      if (typeof consentSource !== "string" || !consentSource.trim() || consentSource.length > 200) {
+        throw httpError(400, "say where consent was given, for example 'website sign-up form'");
+      }
+      if (!validConsentDate(consentDate)) throw httpError(400, "consent date must be a real date in the past, YYYY-MM-DD");
+
+      const { valid, invalid } = parseContactLines(text);
+      const s = store.get();
+      const known = new Set(s.contacts.map((c) => c.email));
+      const suppressed = new Set(s.suppressed);
+      const now = Date.now();
+      const added = [];
+      let duplicates = 0;
+      let blocked = 0;
+      for (const c of valid) {
+        if (known.has(c.email)) {
+          duplicates++;
+          continue;
+        }
+        if (suppressed.has(c.email)) {
+          blocked++;
+          continue;
+        }
+        known.add(c.email);
+        added.push({ email: c.email, name: c.name, consentSource: consentSource.trim(), consentDate, addedAt: now });
+      }
+      store.set({ contacts: [...s.contacts, ...added] });
+      res.json({ added: added.length, duplicates, onDoNotEmailList: blocked, invalid: invalid.length, invalidLines: invalid.slice(0, 20) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/contacts/clear", (req, res, next) => {
+    if (campaigns?.running) return next(httpError(409, "stop-the-campaign-first"));
+    // Clears the list only. The send record and do-not-email list are kept.
+    store.set({ contacts: [] });
+    res.json({ ok: true });
   });
 
   app.get("/api/smtp", (req, res) => {

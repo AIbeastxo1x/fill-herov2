@@ -31,6 +31,7 @@ export const DEFAULTS = {
   dailyDate: "",
   lastSubmitAt: 0,
   dryRun: true, // safe default: fill but never submit
+  contacts: [], // consent-based list: { email, name, consentSource, consentDate, addedAt }. Only these get campaign emails.
   campaign: { subject: "", body: "" }, // the email campaign's inquiry message
   emailLog: [], // one entry per address the campaign handled; kept by Clear all so no address is emailed twice
   suppressed: [], // do-not-email list: addresses that must never be emailed

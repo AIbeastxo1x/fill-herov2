@@ -98,8 +98,10 @@ never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed f
 
 ## Email campaign
 
-The email card sends one inquiry email to each address the domain run extracted. It uses an
-SMTP relay you set up with your own provider.
+The email campaign sends to the **consented contacts** list only. Import each list in the
+**Consented contacts** card. Every import must say where and when those people agreed to be
+contacted, and the tool refuses an import without both. Addresses found on websites are never
+used for campaigns. It uses an SMTP relay you set up with your own provider.
 
 Set the relay in the **Email relay (SMTP)** card on the page: host, port, login name, sender
 address and password. The password is encrypted before it is saved, and the page never shows it

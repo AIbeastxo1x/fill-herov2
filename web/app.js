@@ -31,7 +31,7 @@ function setStatus(text, ok) {
 }
 
 function showCards(visible) {
-  for (const id of ["run-card", "report-card", "profile-card", "files-card", "smtp-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
+  for (const id of ["run-card", "report-card", "profile-card", "files-card", "smtp-card", "contacts-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
 }
 
 function fillProfile(profile) {
@@ -79,7 +79,61 @@ async function refresh() {
   }
   await refreshCampaign();
   await refreshSmtp();
+  await refreshContacts();
 }
+
+// ---------- consented contacts ----------
+
+async function refreshContacts() {
+  try {
+    const c = await (await api("/contacts")).json();
+    const sources = c.bySource.map((s) => `${s.source}: ${s.count}`).join("; ");
+    $("contacts-summary").textContent = c.count
+      ? `${c.count} consented contacts. ${sources}.`
+      : "No contacts yet.";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("contacts-msg").textContent = `Could not load contacts: ${err.message}`;
+  }
+}
+
+$("k-date").value = new Date().toISOString().slice(0, 10);
+
+$("import-contacts").addEventListener("click", async () => {
+  const text = $("k-list").value;
+  const consentSource = $("k-source").value.trim();
+  const consentDate = $("k-date").value;
+  if (!text.trim()) return;
+  if (!consentSource) {
+    $("contacts-msg").textContent = "Say where these people agreed to be contacted.";
+    return;
+  }
+  try {
+    const r = await api("/contacts/import", { method: "POST", body: { text, consentSource, consentDate } });
+    const d = await r.json();
+    const parts = [`Added ${d.added}`];
+    if (d.duplicates) parts.push(`${d.duplicates} already on the list`);
+    if (d.onDoNotEmailList) parts.push(`${d.onDoNotEmailList} on the do-not-email list`);
+    if (d.invalid) parts.push(`${d.invalid} lines not valid emails: ${d.invalidLines.join(" | ")}`);
+    $("contacts-msg").textContent = parts.join(". ") + ".";
+    if (d.added) $("k-list").value = "";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("contacts-msg").textContent = `Not imported: ${err.message}`;
+  }
+  refreshContacts();
+  refreshCampaign();
+});
+
+$("clear-contacts").addEventListener("click", async () => {
+  if (!confirm("Remove every contact from the campaign list? The send record and do-not-email list are kept.")) return;
+  try {
+    await api("/contacts/clear", { method: "POST" });
+    $("contacts-msg").textContent = "Contact list cleared.";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("contacts-msg").textContent = `Not cleared: ${err.message}`;
+  }
+  refreshContacts();
+  refreshCampaign();
+});
 
 // ---------- email campaign ----------
 

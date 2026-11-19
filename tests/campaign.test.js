@@ -25,11 +25,11 @@ async function newStore(extra = {}) {
   store.set({
     profile: { ...store.get().profile, ...PROFILE },
     campaign: { subject: "Quote for {domain}", body: "Hello {domain} team,\n\nWe would like a quote." },
-    emails: [
-      { host: "a.com", email: "info@a.com" },
-      { host: "b.com", email: "sales@b.com" },
-      { host: "b.com", email: "sales@b.com" },
-      { host: "c.com", email: "hello@c.com" },
+    contacts: [
+      { email: "info@a.com", consentSource: "test", consentDate: "2026-01-01" },
+      { email: "sales@b.com", consentSource: "test", consentDate: "2026-01-01" },
+      { email: "sales@b.com", consentSource: "test", consentDate: "2026-01-01" },
+      { email: "hello@c.com", consentSource: "test", consentDate: "2026-01-01" },
     ],
     ...extra,
   });
@@ -71,11 +71,11 @@ test("composed email fills the domain, adds the sender footer and an opt-out lin
 
 test("recipients are unique and skip addresses already sent or suppressed", () => {
   const list = pendingRecipients({
-    emails: [
-      { host: "a.com", email: "info@a.com" },
-      { host: "b.com", email: "sales@b.com" },
-      { host: "b.com", email: "sales@b.com" },
-      { host: "c.com", email: "hello@c.com" },
+    contacts: [
+      { email: "info@a.com" },
+      { email: "sales@b.com" },
+      { email: "sales@b.com" },
+      { email: "hello@c.com" },
     ],
     emailLog: [{ email: "info@a.com", status: "sent" }],
     suppressed: ["hello@c.com"],
@@ -118,7 +118,7 @@ test("the do-not-email list is never sent to", async () => {
 
 test("a failed send is recorded and the address is not marked as sent", async () => {
   const store = await newStore({
-    emails: [{ host: "d.com", email: "fail@d.com" }],
+    contacts: [{ email: "fail@d.com", consentSource: "test", consentDate: "2026-01-01" }],
   });
   const runner = new CampaignRunner(store, { mailer: fakeMailer(), sleep: noSleep });
   runner.start({ dryRun: false });

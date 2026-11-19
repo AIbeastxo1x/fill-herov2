@@ -39,16 +39,18 @@ export function composeEmail({ subject, body, profile, host, email, from }) {
   };
 }
 
-// Unique addresses that have not been sent to and are not on the do-not-email list.
+// Consented contacts that have not been sent to and are not on the do-not-email list.
+// Only the contacts list is used. Addresses found on websites are never emailed.
 export function pendingRecipients(state) {
   const sent = new Set(state.emailLog.filter((e) => e.status === "sent").map((e) => e.email));
   const suppressed = new Set(state.suppressed);
   const seen = new Set();
   const out = [];
-  for (const item of state.emails) {
-    if (seen.has(item.email) || sent.has(item.email) || suppressed.has(item.email)) continue;
-    seen.add(item.email);
-    out.push(item);
+  for (const contact of state.contacts ?? []) {
+    const email = contact.email;
+    if (seen.has(email) || sent.has(email) || suppressed.has(email)) continue;
+    seen.add(email);
+    out.push({ email, host: email.split("@")[1] || "" });
   }
   return out;
 }
