@@ -44,6 +44,18 @@
     <p class="help" id="run-help"></p>
   </section>
 
+  <section class="card" id="live-card" hidden>
+    <h2>Live view</h2>
+    <p class="help">What the browser is doing now. The screenshot is kept in the server's memory only, and it is cleared when the next run starts.</p>
+    <div class="live">
+      <div>
+        <img id="live-img" alt="Latest screenshot from the browser" hidden>
+        <p class="help" id="live-empty">No screenshot yet. Start a run to see the browser here.</p>
+      </div>
+      <ol id="live-steps" class="steps"></ol>
+    </div>
+  </section>
+
   <section class="card" id="report-card" hidden>
     <h2>Run report</h2>
     <table class="report"><tbody id="summary"></tbody></table>

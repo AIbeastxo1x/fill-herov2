@@ -129,6 +129,15 @@ test("a live run fills and submits the fixture form, and the site receives the v
     assert.equal(rows[0].status, "sent", JSON.stringify(rows[0]));
     assert.match(rows[0].reason, /filled=firstName,lastName,company,email,subject,message/);
 
+    // The live view recorded each step, and kept a screenshot of the form.
+    const live = ctx.engine.live.snapshot();
+    const texts = live.steps.map((s) => s.text).join(" | ");
+    assert.match(texts, /Run started/);
+    assert.match(texts, /Opened/);
+    assert.match(texts, /Filled the form/);
+    assert.match(texts, /Submitted/);
+    assert.ok(live.image && live.image.length > 1000, "a screenshot was kept in the live view");
+
     const submitted = requests.find((u) => u.startsWith("/thanks.html?"));
     assert.ok(submitted, JSON.stringify(requests));
     const params = new URL(submitted, "http://x").searchParams;

@@ -87,6 +87,10 @@ never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed f
 - `extractedemails.txt`: every unique address found on sites with no usable form.
 - `captcha_domains.txt`: domains stopped by a CAPTCHA.
 - The log is kept on the server and is not shown in the page, as in the extension.
+- **Live view:** during a run, the page shows each step (opened, filled, waiting for the gap,
+  submitted or not) with the latest screenshot from the headless browser. This is kept in the
+  server's memory only and is cleared when the next run starts, because a screenshot can show
+  what was typed into a form.
 
 ## Limits to know
 

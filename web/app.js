@@ -31,7 +31,7 @@ function setStatus(text, ok) {
 }
 
 function showCards(visible) {
-  for (const id of ["run-card", "report-card", "profile-card", "files-card", "smtp-card", "contacts-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
+  for (const id of ["run-card", "live-card", "report-card", "profile-card", "files-card", "smtp-card", "contacts-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
 }
 
 function fillProfile(profile) {
@@ -77,9 +77,56 @@ async function refresh() {
     if (err.message !== SIGNED_OUT) setStatus(`Error: ${err.message}`, false);
     return;
   }
+  await refreshLive();
   await refreshCampaign();
   await refreshSmtp();
   await refreshContacts();
+}
+
+// ---------- live view ----------
+
+let lastStepCount = -1;
+
+async function refreshLive() {
+  try {
+    const d = await (await api("/live")).json();
+    if (d.stepCount === lastStepCount) return; // nothing new since the last check
+    lastStepCount = d.stepCount;
+
+    const list = $("live-steps");
+    list.replaceChildren(
+      ...d.steps.map((s) => {
+        const li = document.createElement("li");
+        const time = document.createElement("span");
+        time.className = "time";
+        time.textContent = new Date(s.at).toLocaleTimeString();
+        li.append(time);
+        if (s.host) {
+          const host = document.createElement("span");
+          host.className = "host";
+          host.textContent = s.host;
+          li.append(host);
+        }
+        li.append(document.createTextNode(s.text));
+        return li;
+      })
+    );
+    if (d.steps.length === 0) {
+      const li = document.createElement("li");
+      li.textContent = "No steps yet.";
+      list.append(li);
+    }
+    list.scrollTop = list.scrollHeight;
+
+    const img = $("live-img");
+    if (d.image) {
+      img.src = `data:image/jpeg;base64,${d.image}`;
+      img.hidden = false;
+      $("live-empty").hidden = true;
+    }
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("live-empty").textContent = `Could not load the live view: ${err.message}`;
+  }
 }
 
 // ---------- consented contacts ----------

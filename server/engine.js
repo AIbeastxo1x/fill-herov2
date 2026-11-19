@@ -12,6 +12,7 @@ import { addLog, hasSent } from "../src/lib/queue.js";
 import { buildFillPlan, summarizePlan } from "../src/lib/fillPlan.js";
 import { siteLanguage, needsTranslation } from "../src/lib/language.js";
 import { extractEmails } from "../src/lib/emails.js";
+import { LiveView } from "./liveview.js";
 
 export const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 export const MAX_CONTACT_PAGES = 3;
@@ -32,9 +33,10 @@ function pickForm(scan) {
 
 export class Engine {
   // store: from store.js. launchOptions: passed to chromium.launch (headless by default).
-  constructor(store, { launchOptions = {} } = {}) {
+  constructor(store, { launchOptions = {}, live = new LiveView() } = {}) {
     this.store = store;
     this.launchOptions = launchOptions;
+    this.live = live; // step feed and screenshots for the web page's live view
     this.running = false;
     this.stopRequested = false;
     this.current = null; // the run's promise, for tests
@@ -89,6 +91,19 @@ export class Engine {
   storeCaptchaDomain(host, pageUrl) {
     const { captchaDomains } = this.store.get();
     this.store.set({ captchaDomains: [...captchaDomains.filter((c) => c.host !== host), { host, pageUrl, at: Date.now() }] });
+  }
+
+  // Records a step for the live view. With a page, also takes a small screenshot of what is on screen.
+  async show(host, text, page = null) {
+    let jpeg = null;
+    if (page) {
+      try {
+        jpeg = await page.screenshot({ type: "jpeg", quality: 55, timeout: 5000 });
+      } catch {
+        jpeg = null; // a screenshot is a nice-to-have; the step is still recorded
+      }
+    }
+    this.live.step(host, text, jpeg);
   }
 
   // ---------- page helpers ----------
@@ -176,6 +191,7 @@ export class Engine {
   async processDomain(page, entry, profile, dryRun) {
     await this.go(page, entry.url);
     const finalUrl = page.url() || entry.url; // the redirected address (e.g. enag.fr -> www.enag.fr)
+    await this.show(entry.host, `Opened ${finalUrl}`, page);
     const links = await this.collectLinks(page);
     const emails = new Set(extractEmails(await page.content().catch(() => "")));
     const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
@@ -190,6 +206,7 @@ export class Engine {
     for (const pageUrl of candidates) {
       if (this.stopRequested) return { status: "skipped", reason: "stopped" };
       await this.go(page, pageUrl);
+      await this.show(entry.host, `Opened contact page ${pageUrl}`);
       await collect();
       let scan;
       try {
@@ -208,6 +225,7 @@ export class Engine {
           const plan = buildFillPlan(pick.form, localized.profile, entry.host);
           const applied = await this.fill(page, pick.form.index, plan.fills);
           note = [summarizePlan(plan, applied), localized.note].filter(Boolean).join("; ");
+          await this.show(entry.host, `Filled the form, CAPTCHA found, not submitted`, page);
         }
         return { status: "queued", reason: `captcha; ${note}`, pageUrl };
       }
@@ -235,15 +253,24 @@ export class Engine {
     const plan = buildFillPlan(pick.form, localized.profile, host);
     const applied = await this.fill(page, pick.form.index, plan.fills);
     const summary = [summarizePlan(plan, applied), localized.note].filter(Boolean).join("; ");
+    await this.show(host, `Filled the form (${summary.slice(0, 160)})`, page);
 
-    if (dryRun) return { status: "skipped", reason: `dry-run; ${summary}`, pageUrl };
+    if (dryRun) {
+      await this.show(host, "Dry run: not submitted", null);
+      return { status: "skipped", reason: `dry-run; ${summary}`, pageUrl };
+    }
 
     // Rate limit gate: wait for the gap, never skip, stop at the daily cap.
+    let waited = false;
     for (;;) {
       if (this.stopRequested) return { status: "skipped", reason: "stopped", pageUrl };
       const gate = canSubmit(this.store.get(), Date.now(), LIMITS);
       if (gate.ok) break;
       if (gate.reason === "daily-cap") return { status: "skipped", reason: "daily-cap", pageUrl };
+      if (!waited) {
+        this.live.step(host, `Waiting ${Math.ceil(gate.waitMs / 1000)} s for the gap between submissions`);
+        waited = true;
+      }
       await sleep(Math.min(gate.waitMs, 5000));
     }
 
@@ -258,6 +285,7 @@ export class Engine {
     }
     const after = page.url();
     const outcome = result?.outcome === "confirmed" || after !== before ? "sent" : "sent?";
+    await this.show(host, outcome === "sent" ? "Submitted, confirmation seen" : "Submitted, no confirmation seen", page);
 
     const state = this.store.get();
     this.store.set({
@@ -271,6 +299,8 @@ export class Engine {
 
   // One domain at a time, each in its own page. The browser closes when the run ends.
   async run(domains, dryRun) {
+    this.live.reset();
+    this.live.step("", `Run started: ${domains.length} domain(s), ${dryRun ? "dry run" : "LIVE"}`);
     const browser = await chromium.launch({ headless: true, ...this.launchOptions });
     try {
       const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
@@ -289,6 +319,7 @@ export class Engine {
         const page = await context.newPage();
         try {
           const r = await this.processDomain(page, entry, profile, dryRun);
+          this.live.step(entry.host, `Result: ${r.status}${r.reason ? ` (${String(r.reason).slice(0, 120)})` : ""}`);
           if (r.status === "queued") {
             let reason = r.reason;
             if (r.emails) reason += `; emails-stored=${this.storeEmails(entry.host, r.pageUrl, r.emails)}`;
@@ -305,6 +336,7 @@ export class Engine {
       }
     } finally {
       await browser.close().catch(() => {});
+      this.live.step("", "Run finished");
     }
   }
 }

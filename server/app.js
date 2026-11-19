@@ -194,6 +194,11 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
     });
   });
 
+  // Live view of the current run: the step feed and the latest screenshot. Nothing is kept on disk.
+  app.get("/api/live", (req, res) => {
+    res.json(engine.live ? engine.live.snapshot() : { steps: [], image: null, imageAt: 0, stepCount: 0 });
+  });
+
   app.put("/api/profile", (req, res) => {
     store.set({ profile: cleanProfile(req.body) });
     res.json({ ok: true });
