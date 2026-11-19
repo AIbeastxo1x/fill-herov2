@@ -31,7 +31,7 @@ function setStatus(text, ok) {
 }
 
 function showCards(visible) {
-  for (const id of ["run-card", "report-card", "profile-card", "files-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
+  for (const id of ["run-card", "report-card", "profile-card", "files-card", "smtp-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
 }
 
 function fillProfile(profile) {
@@ -78,6 +78,7 @@ async function refresh() {
     return;
   }
   await refreshCampaign();
+  await refreshSmtp();
 }
 
 // ---------- email campaign ----------
@@ -101,6 +102,75 @@ async function refreshCampaign() {
     if (err.message !== SIGNED_OUT) $("campaign-help").textContent = `Could not load the campaign: ${err.message}`;
   }
 }
+
+// ---------- relay settings ----------
+
+function renderSmtp(s) {
+  if (document.activeElement !== $("s-host")) $("s-host").value = s.host;
+  if (document.activeElement !== $("s-port")) $("s-port").value = s.port;
+  if (document.activeElement !== $("s-user")) $("s-user").value = s.user;
+  if (document.activeElement !== $("s-from")) $("s-from").value = s.from;
+  $("smtp-source").textContent = s.configured
+    ? `Connected to ${s.host} (settings from ${s.source === "settings" ? "this page" : "the server's environment"}).`
+    : "Not set up yet. Enter the relay details below and save.";
+  $("s-pass-help").textContent = s.passwordSaved
+    ? "A password is saved. It is never shown. Type a new one to replace it."
+    : "No password saved.";
+}
+
+async function refreshSmtp() {
+  try {
+    renderSmtp(await (await api("/smtp")).json());
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("smtp-msg").textContent = `Could not load relay settings: ${err.message}`;
+  }
+}
+
+function smtpPayload(extra = {}) {
+  return {
+    host: $("s-host").value,
+    port: Number($("s-port").value || 587),
+    user: $("s-user").value,
+    from: $("s-from").value,
+    ...extra,
+  };
+}
+
+$("save-smtp").addEventListener("click", async () => {
+  $("smtp-msg").textContent = "Saving…";
+  try {
+    const r = await api("/smtp", { method: "PUT", body: smtpPayload({ password: $("s-pass").value }) });
+    renderSmtp(await r.json());
+    $("s-pass").value = "";
+    $("smtp-msg").textContent = "Saved.";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("smtp-msg").textContent = `Not saved: ${err.message}`;
+  }
+  refreshCampaign();
+});
+
+$("clear-pass").addEventListener("click", async () => {
+  if (!confirm("Remove the saved relay password? Live sending will stop until a password is saved again.")) return;
+  try {
+    const r = await api("/smtp", { method: "PUT", body: smtpPayload({ clearPassword: true }) });
+    renderSmtp(await r.json());
+    $("smtp-msg").textContent = "Saved password removed.";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("smtp-msg").textContent = `Not removed: ${err.message}`;
+  }
+  refreshCampaign();
+});
+
+$("test-smtp").addEventListener("click", async () => {
+  $("smtp-msg").textContent = "Sending test…";
+  try {
+    const r = await api("/smtp/test", { method: "POST" });
+    const data = await r.json();
+    $("smtp-msg").textContent = `Test sent to ${data.to}. Check that inbox.`;
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("smtp-msg").textContent = `Test failed: ${err.message}`;
+  }
+});
 
 $("save-campaign").addEventListener("click", async () => {
   try {

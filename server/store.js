@@ -35,6 +35,7 @@ export const DEFAULTS = {
   emailLog: [], // one entry per address the campaign handled; kept by Clear all so no address is emailed twice
   suppressed: [], // do-not-email list: addresses that must never be emailed
   emailDaily: { date: "", count: 0 }, // emails sent today, for the daily cap
+  smtp: { host: "", port: 587, user: "", from: "", passEnc: "" }, // relay settings from the web page; passEnc is encrypted
 };
 
 export function createStore(dir) {

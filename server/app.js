@@ -7,6 +7,7 @@ import { LIMITS } from "./engine.js";
 import { parseDomainList } from "../src/lib/normalize.js";
 import { buildEmailsFile, buildCaptchaFile } from "../src/lib/files.js";
 import { pendingRecipients } from "./campaign.js";
+import { encryptSecret } from "./mailer.js";
 
 const campaignRecipientsCount = (state) => pendingRecipients(state).length;
 
@@ -66,6 +67,41 @@ function cleanCampaign(input) {
 function parseAddresses(text) {
   const found = String(text || "").toLowerCase().split(/[\s,;]+/).filter((s) => s.includes("@") && s.length <= 254);
   return [...new Set(found)];
+}
+
+// Relay settings from the page. The password is never returned, only whether one is saved.
+function smtpView(store, campaigns, env = process.env) {
+  const s = store.get().smtp;
+  const source = s.host ? "settings" : env.SMTP_HOST ? "environment" : "none";
+  return {
+    host: s.host || env.SMTP_HOST || "",
+    port: s.port || Number(env.SMTP_PORT || 587),
+    user: s.user || env.SMTP_USER || "",
+    from: s.from || env.EMAIL_FROM || "",
+    passwordSaved: Boolean(s.passEnc) || Boolean(!s.host && env.SMTP_PASS),
+    source,
+    configured: Boolean(campaigns?.configured()),
+  };
+}
+
+function cleanSmtp(input) {
+  if (!input || typeof input !== "object") throw httpError(400, "settings must be an object");
+  const text = (key, max) => {
+    const v = input[key] ?? "";
+    if (typeof v !== "string") throw httpError(400, `${key} must be text`);
+    if (v.length > max) throw httpError(400, `${key} is too long`);
+    return v.trim();
+  };
+  const host = text("host", 255);
+  if (host && !/^[A-Za-z0-9.-]+$/.test(host)) throw httpError(400, "host must be a host name, for example smtp.provider.com");
+  const port = Number(input.port ?? 587);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw httpError(400, "port must be a number from 1 to 65535");
+  const user = text("user", 254);
+  const from = text("from", 254);
+  if (from && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(from)) throw httpError(400, "sender address must be an email address");
+  const password = input.password ?? "";
+  if (typeof password !== "string" || password.length > 500) throw httpError(400, "password is too long or not text");
+  return { host, port, user, from, password, clearPassword: input.clearPassword === true };
 }
 
 export function createApp({ store, engine, token, origins = [], campaigns = null }) {
@@ -204,6 +240,36 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
       res.json({ ok: true, suppressed: suppressed.length });
     } catch (err) {
       next(err);
+    }
+  });
+
+  app.get("/api/smtp", (req, res) => {
+    res.json(smtpView(store, campaigns));
+  });
+
+  app.put("/api/smtp", (req, res, next) => {
+    try {
+      const input = cleanSmtp(req.body);
+      const current = store.get().smtp;
+      let passEnc = current.passEnc;
+      if (input.clearPassword) passEnc = "";
+      if (input.password) passEnc = encryptSecret(input.password, token);
+      store.set({ smtp: { host: input.host, port: input.port, user: input.user, from: input.from, passEnc } });
+      res.json(smtpView(store, campaigns));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/smtp/test", async (req, res, next) => {
+    try {
+      if (!campaigns) throw httpError(500, "campaigns-unavailable");
+      const sent = await campaigns.testSend();
+      res.json({ ok: true, to: sent.to });
+    } catch (err) {
+      if (err.status === 400) return next(err);
+      // Relay errors can name the server, so only the first part is shown.
+      next(httpError(502, `relay error: ${String(err?.message ?? err).slice(0, 200)}`));
     }
   });
 

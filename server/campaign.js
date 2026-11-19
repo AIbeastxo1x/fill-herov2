@@ -54,10 +54,11 @@ export function pendingRecipients(state) {
 }
 
 export class CampaignRunner {
-  // store: from store.js. mailer: from mailerFromEnv, or any object with send(message).
+  // store: from store.js. mailer: a function returning the current mailer ({ from, send(message) }) or null,
+  // or a mailer object itself.
   constructor(store, { mailer = null, gapMs = 60000, dailyCap = 100, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
     this.store = store;
-    this.mailer = mailer;
+    this.mailerSource = typeof mailer === "function" ? mailer : () => mailer;
     this.gapMs = gapMs;
     this.dailyCap = dailyCap;
     this.sleep = sleep;
@@ -67,7 +68,20 @@ export class CampaignRunner {
   }
 
   configured() {
-    return Boolean(this.mailer);
+    return Boolean(this.mailerSource());
+  }
+
+  // Sends one test message to the sender address itself, to check the relay settings.
+  async testSend() {
+    const mailer = this.mailerSource();
+    if (!mailer) throw Object.assign(new Error("not-configured"), { status: 400 });
+    await mailer.send({
+      from: mailer.from,
+      to: mailer.from,
+      subject: "Fill Hero relay test",
+      text: "This is a test from Fill Hero. If you can read it, the SMTP relay settings work.",
+    });
+    return { to: mailer.from };
   }
 
   start({ dryRun }) {
@@ -95,7 +109,9 @@ export class CampaignRunner {
 
   async run(recipients, dryRun) {
     const campaign = this.store.get().campaign;
-    const from = this.mailer?.from || "";
+    const mailer = this.mailerSource();
+    if (!dryRun && !mailer) return; // no relay configured: nothing is sent
+    const from = mailer?.from || "";
     for (let i = 0; i < recipients.length; i++) {
       if (this.stopRequested) break;
       const { email, host } = recipients[i];
@@ -114,7 +130,7 @@ export class CampaignRunner {
 
       const message = composeEmail({ subject: campaign.subject, body: campaign.body, profile: this.store.get().profile, host, email, from });
       try {
-        await this.mailer.send(message);
+        await mailer.send(message);
         this.record({ email, host, status: "sent" });
         this.store.set({ emailDaily: { date: today, count: count + 1 } });
       } catch (err) {

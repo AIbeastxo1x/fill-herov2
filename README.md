@@ -99,11 +99,16 @@ never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed f
 ## Email campaign
 
 The email card sends one inquiry email to each address the domain run extracted. It uses an
-SMTP relay you set up with your own provider. Set these on the server (Render), as secrets:
+SMTP relay you set up with your own provider.
 
-- `SMTP_HOST`, `SMTP_PORT` (default 587), `SMTP_USER`, `SMTP_PASS`
-- `EMAIL_FROM`: the sender address your relay has verified
-- `EMAIL_GAP_SECONDS` (default 60) and `EMAIL_DAILY_CAP` (default 100)
+Set the relay in the **Email relay (SMTP)** card on the page: host, port, login name, sender
+address and password. The password is encrypted before it is saved, and the page never shows it
+back. Use **Send test to my sender address** to check the settings. If you change
+`FILLHERO_TOKEN`, the saved password can't be read, so enter it again.
+
+The same settings can come from the server's environment instead, used when nothing is saved
+in the page: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`. Also
+`EMAIL_GAP_SECONDS` (default 60) and `EMAIL_DAILY_CAP` (default 100).
 
 Safety built in: dry run is on by default, each address is emailed once (Clear all keeps this),
 the do-not-email list is never sent to, every email has your name, company and postal address,

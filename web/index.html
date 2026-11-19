@@ -85,6 +85,25 @@
     </div>
   </section>
 
+  <section class="card" id="smtp-card" hidden>
+    <h2>Email relay (SMTP)</h2>
+    <p class="help" id="smtp-source"></p>
+    <div class="grid">
+      <label>Host <input id="s-host" type="text" placeholder="smtp.your-provider.com" autocomplete="off"></label>
+      <label>Port <input id="s-port" type="number" min="1" max="65535" placeholder="587"></label>
+      <label>Login name <input id="s-user" type="text" autocomplete="off"></label>
+      <label>Sender address <input id="s-from" type="email" placeholder="outreach@your-domain.com"></label>
+    </div>
+    <label>Password <input id="s-pass" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved one"></label>
+    <p class="help" id="s-pass-help"></p>
+    <div class="row wrap">
+      <button id="save-smtp" class="primary">Save relay settings</button>
+      <button id="test-smtp">Send test to my sender address</button>
+      <button id="clear-pass">Remove saved password</button>
+    </div>
+    <p class="help" id="smtp-msg"></p>
+  </section>
+
   <section class="card" id="campaign-card" hidden>
     <h2>Email campaign</h2>
     <p class="help" id="campaign-config"></p>

@@ -8,7 +8,7 @@ import { createStore } from "./store.js";
 import { Engine } from "./engine.js";
 import { createApp } from "./app.js";
 import { CampaignRunner, campaignLimitsFromEnv } from "./campaign.js";
-import { mailerFromEnv } from "./mailer.js";
+import { makeMailerSource } from "./mailer.js";
 
 const token = process.env.FILLHERO_TOKEN || "";
 if (token.length < 24) {
@@ -25,7 +25,8 @@ await store.load();
 const engine = new Engine(store, {
   launchOptions: { args: ["--no-sandbox", "--disable-dev-shm-usage"] }, // needed inside most containers
 });
-const campaigns = new CampaignRunner(store, { mailer: mailerFromEnv(), ...campaignLimitsFromEnv() });
+// The relay is read from the saved settings, falling back to environment variables.
+const campaigns = new CampaignRunner(store, { mailer: makeMailerSource(store, { token }), ...campaignLimitsFromEnv() });
 const app = createApp({ store, engine, token, origins, campaigns });
 
 const server = app.listen(port, () => {
