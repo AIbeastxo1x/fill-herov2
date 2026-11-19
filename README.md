@@ -66,7 +66,7 @@ Set the same three things on your host: `FILLHERO_TOKEN`, `ALLOWED_ORIGINS`, and
 Generate a token with:
 
 ```powershell
-[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(36))
+$b = New-Object byte[] 36; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)
 ```
 
 ## 3. Deploy the front end (Netlify)
