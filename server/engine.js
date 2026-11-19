@@ -17,6 +17,18 @@ import { LiveView } from "./liveview.js";
 export const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 export const MAX_CONTACT_PAGES = 3;
 const PAGE_TIMEOUT_MS = 20000;
+const STEP_TIMEOUT_MS = 20000; // any single browser call (scan, fill, submit) gives up after this
+const DOMAIN_TIMEOUT_MS = 120000; // a whole domain gives up after this, so one bad site cannot stall a run
+
+// Rejects if the promise does not settle in time. The error text starts with "timed out".
+function withTimeout(promise, ms, label) {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out: ${label}`)), ms);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+const isTimeout = (err) => String(err?.message ?? err).startsWith("timed out");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONTENT_PATH = path.join(HERE, "..", "src", "content.js");
@@ -65,6 +77,8 @@ export class Engine {
 
   stop() {
     this.stopRequested = true;
+    // Closing the open page cancels a browser call that is waiting, so Stop takes effect at once.
+    this.currentPage?.close().catch(() => {});
   }
 
   // ---------- store helpers ----------
@@ -115,13 +129,13 @@ export class Engine {
 
   // Injects the page script once per page. Scan, fill and submit all run through it.
   async ensureContent(page) {
-    const has = await page.evaluate(() => Boolean(window.__fillHero)).catch(() => false);
-    if (!has) await page.addScriptTag({ content: await this.loadContentScript() });
+    const has = await withTimeout(page.evaluate(() => Boolean(window.__fillHero)), STEP_TIMEOUT_MS, "check page").catch(() => false);
+    if (!has) await withTimeout(page.addScriptTag({ content: await this.loadContentScript() }), STEP_TIMEOUT_MS, "load page script");
   }
 
   async scan(page) {
     await this.ensureContent(page);
-    return page.evaluate(() => window.__fillHero.scan());
+    return withTimeout(page.evaluate(() => window.__fillHero.scan()), STEP_TIMEOUT_MS, "scan form");
   }
 
   // Some pages render their form a moment after load. Retry the scan if no form is found yet.
@@ -134,14 +148,22 @@ export class Engine {
     return scan;
   }
 
+  // Returns "" when the page loaded, or the reason it did not. A slow page is still scanned.
   async go(page, url) {
-    await page.goto(url, { waitUntil: "load", timeout: PAGE_TIMEOUT_MS }).catch(() => {}); // a slow page still gets scanned
+    try {
+      await page.goto(url, { waitUntil: "load", timeout: PAGE_TIMEOUT_MS });
+      return "";
+    } catch (err) {
+      return String(err?.message ?? err).split("\n")[0].slice(0, 160);
+    }
   }
 
   async collectLinks(page) {
-    return page
-      .evaluate(() => Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.getAttribute("href"), text: a.textContent || "" })))
-      .catch(() => []);
+    return withTimeout(
+      page.evaluate(() => Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.getAttribute("href"), text: a.textContent || "" }))),
+      STEP_TIMEOUT_MS,
+      "read links"
+    ).catch(() => []);
   }
 
   // Translates with the browser's built-in Translator API when the page has it. Otherwise the
@@ -183,30 +205,33 @@ export class Engine {
 
   async fill(page, formIndex, fills) {
     await this.ensureContent(page);
-    return page.evaluate(([i, f]) => window.__fillHero.fillAndVerify(i, f), [formIndex, fills]);
+    return withTimeout(page.evaluate(([i, f]) => window.__fillHero.fillAndVerify(i, f), [formIndex, fills]), STEP_TIMEOUT_MS, "fill form");
   }
 
   // ---------- per-domain flow ----------
 
-  async processDomain(page, entry, profile, dryRun) {
-    await this.go(page, entry.url);
+  // token.aborted is set when the domain runs out of time; from then on nothing is submitted.
+  async processDomain(page, entry, profile, dryRun, token) {
+    const openError = await this.go(page, entry.url);
     const finalUrl = page.url() || entry.url; // the redirected address (e.g. enag.fr -> www.enag.fr)
-    await this.show(entry.host, `Opened ${finalUrl}`, page);
+    if (openError) await this.show(entry.host, `Could not open ${entry.url}: ${openError}`, page);
+    else await this.show(entry.host, `Opened ${finalUrl}`, page);
     const links = await this.collectLinks(page);
-    const emails = new Set(extractEmails(await page.content().catch(() => "")));
+    const pageHtml = () => withTimeout(page.content(), STEP_TIMEOUT_MS, "read page").catch(() => "");
+    const emails = new Set(extractEmails(await pageHtml()));
     const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
 
     const collect = async () => {
-      for (const e of extractEmails(await page.content().catch(() => ""))) emails.add(e);
+      for (const e of extractEmails(await pageHtml())) emails.add(e);
     };
 
     let fallback = null;
     let scanError = null;
     const attempts = [];
     for (const pageUrl of candidates) {
-      if (this.stopRequested) return { status: "skipped", reason: "stopped" };
-      await this.go(page, pageUrl);
-      await this.show(entry.host, `Opened contact page ${pageUrl}`);
+      if (this.stopRequested || token.aborted) return { status: "skipped", reason: this.stopRequested ? "stopped" : "timed out" };
+      const contactError = await this.go(page, pageUrl);
+      await this.show(entry.host, contactError ? `Could not open ${pageUrl}: ${contactError}` : `Opened contact page ${pageUrl}`);
       await collect();
       let scan;
       try {
@@ -237,7 +262,7 @@ export class Engine {
         fallback = fallback ?? { pageUrl, reason: pick.score.reason };
         continue;
       }
-      return this.submitPick({ page, pick, pageUrl, profile, dryRun, host: entry.host, lang: scan.lang });
+      return this.submitPick({ page, pick, pageUrl, profile, dryRun, host: entry.host, lang: scan.lang, token });
     }
 
     if (fallback) return { status: "queued", reason: fallback.reason, pageUrl: fallback.pageUrl };
@@ -248,7 +273,7 @@ export class Engine {
     return { ...noForm, reason: `no-usable-form (${tried})`, pageUrl: entry.url };
   }
 
-  async submitPick({ page, pick, pageUrl, profile, dryRun, host, lang }) {
+  async submitPick({ page, pick, pageUrl, profile, dryRun, host, lang, token }) {
     const localized = await this.localizeProfile(page, profile, host, lang);
     const plan = buildFillPlan(pick.form, localized.profile, host);
     const applied = await this.fill(page, pick.form.index, plan.fills);
@@ -264,6 +289,7 @@ export class Engine {
     let waited = false;
     for (;;) {
       if (this.stopRequested) return { status: "skipped", reason: "stopped", pageUrl };
+      if (token.aborted) return { status: "skipped", reason: "timed out", pageUrl };
       const gate = canSubmit(this.store.get(), Date.now(), LIMITS);
       if (gate.ok) break;
       if (gate.reason === "daily-cap") return { status: "skipped", reason: "daily-cap", pageUrl };
@@ -275,13 +301,16 @@ export class Engine {
     }
 
     await sleep(300 + Math.random() * 400); // brief human-like pause
+    if (token.aborted || this.stopRequested) return { status: "skipped", reason: this.stopRequested ? "stopped" : "timed out", pageUrl };
     const before = page.url();
     let result;
     try {
       await this.ensureContent(page);
-      result = await page.evaluate(([i, url]) => window.__fillHero.submit(i, url), [pick.form.index, before]);
-    } catch {
-      result = { outcome: "confirmed" }; // the page navigated away during submit: a likely success
+      result = await withTimeout(page.evaluate(([i, url]) => window.__fillHero.submit(i, url), [pick.form.index, before]), STEP_TIMEOUT_MS, "submit form");
+    } catch (err) {
+      // A timeout means we cannot tell whether the form went through, so it is never reported as a clean send.
+      // A navigation during submit usually means it did.
+      result = isTimeout(err) ? { outcome: "unknown" } : { outcome: "confirmed" };
     }
     const after = page.url();
     const outcome = result?.outcome === "confirmed" || after !== before ? "sent" : "sent?";
@@ -317,8 +346,13 @@ export class Engine {
         }
 
         const page = await context.newPage();
+        this.currentPage = page;
+        const token = { aborted: false };
         try {
-          const r = await this.processDomain(page, entry, profile, dryRun);
+          const r = await withTimeout(this.processDomain(page, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
+            token.aborted = true; // a late submit from the abandoned attempt is refused
+            throw err;
+          });
           this.live.step(entry.host, `Result: ${r.status}${r.reason ? ` (${String(r.reason).slice(0, 120)})` : ""}`);
           if (r.status === "queued") {
             let reason = r.reason;
@@ -329,8 +363,15 @@ export class Engine {
             this.log({ host: entry.host, status: r.status, reason: r.reason, pageUrl: r.pageUrl });
           }
         } catch (err) {
-          this.log({ host: entry.host, status: "failed", reason: String(err?.message ?? err), pageUrl: entry.url });
+          const reason = this.stopRequested
+            ? "stopped by the user"
+            : isTimeout(err)
+              ? `timed out after ${DOMAIN_TIMEOUT_MS / 1000} s; nothing more was done here`
+              : String(err?.message ?? err);
+          this.log({ host: entry.host, status: "failed", reason, pageUrl: entry.url });
+          this.live.step(entry.host, `Gave up: ${reason}`);
         } finally {
+          this.currentPage = null;
           await page.close().catch(() => {});
         }
       }
