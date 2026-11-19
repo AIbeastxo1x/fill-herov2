@@ -5,8 +5,13 @@ import crypto from "node:crypto";
 export const COOKIE = "fh_session";
 export const MAX_AGE = 8 * 60 * 60; // eight hours
 
-export function sessionValue(secret) {
-  return crypto.createHmac("sha256", secret).update("fillhero-session-v1").digest("hex");
+// The cookie value depends on SESSION_VERSION (default "1"). Changing it in Netlify signs out every browser at once.
+export function sessionValue(secret, version = "1") {
+  return crypto.createHmac("sha256", secret).update(`fillhero-session-v1:${version}`).digest("hex");
+}
+
+export function sessionVersion(env = process.env) {
+  return String(env.SESSION_VERSION || "1");
 }
 
 // Compare two strings in constant time. Hashing first makes the lengths equal.
@@ -28,11 +33,11 @@ export function cookieValue(headers = {}, name = COOKIE) {
 export function isSignedIn(headers, env = process.env) {
   if (!env.FILLHERO_TOKEN) return false;
   const value = cookieValue(headers);
-  return value !== "" && safeEqual(value, sessionValue(env.FILLHERO_TOKEN));
+  return value !== "" && safeEqual(value, sessionValue(env.FILLHERO_TOKEN, sessionVersion(env)));
 }
 
 export function sessionCookie(env = process.env) {
-  return `${COOKIE}=${sessionValue(env.FILLHERO_TOKEN)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${MAX_AGE}`;
+  return `${COOKIE}=${sessionValue(env.FILLHERO_TOKEN, sessionVersion(env))}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${MAX_AGE}`;
 }
 
 export function clearCookie() {

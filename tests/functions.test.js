@@ -63,6 +63,23 @@ test("correct password sets an HttpOnly cookie that does not contain the token",
   assert.ok(!header.includes(TOKEN));
 });
 
+test("raising SESSION_VERSION signs out every browser", async () => {
+  const login = await auth(ev("/auth/login", { httpMethod: "POST", body: JSON.stringify({ password: PASSWORD }) }));
+  const headers = { cookie: cookieFrom(login) };
+  assert.equal((await auth(ev("/auth/check", { headers }))).statusCode, 200);
+
+  process.env.SESSION_VERSION = "99";
+  try {
+    assert.equal((await auth(ev("/auth/check", { headers }))).statusCode, 401);
+    assert.equal((await api(ev("/api/state", { headers }))).statusCode, 401);
+    // A new sign-in works under the new version.
+    const again = await auth(ev("/auth/login", { httpMethod: "POST", body: JSON.stringify({ password: PASSWORD }) }));
+    assert.equal((await auth(ev("/auth/check", { headers: { cookie: cookieFrom(again) } }))).statusCode, 200);
+  } finally {
+    delete process.env.SESSION_VERSION;
+  }
+});
+
 test("api is refused without a sign-in and reaches nothing", async () => {
   const before = seen.length;
   const res = await api(ev("/api/state"));
