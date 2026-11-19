@@ -6,10 +6,10 @@
   "permissions": ["tabs", "storage", "scripting", "activeTab", "downloads"],
   "host_permissions": ["<all_urls>"],
   "background": {
-    "service_worker": "src/background.js",
+    "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_popup": "src/popup/popup.html"
+    "default_popup": "popup/popup.html"
   }
 }

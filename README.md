@@ -11,7 +11,13 @@ Netlify (web/)  ──HTTPS + bearer token──▶  Server (server/, Docker, he
                                               └─ src/content.js  page script (scan, fill, submit)
 ```
 
-The Chrome extension in the same project is unchanged. It still works on its own.
+The Chrome extension lives in the `extension/` folder and still works on its own. Its matching
+code and page script are copies of the ones in `src/`. Edit them in `src/`, then run
+`npm run sync:extension`. A test fails if the copies are out of date.
+
+To load the extension in Chrome: open `chrome://extensions`, turn on **Developer mode**, click
+**Load unpacked**, and choose the `extension` folder. If you loaded it from the project root
+before, remove that entry first.
 
 ## Safety rules (built in)
 

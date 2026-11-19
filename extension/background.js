@@ -171,7 +171,7 @@ async function clearAll() {
 
 // Inject the content script (idempotent) and send it a message.
 async function toContent(tabId, msg) {
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["src/content.js"] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
   return chrome.tabs.sendMessage(tabId, msg);
 }
 
