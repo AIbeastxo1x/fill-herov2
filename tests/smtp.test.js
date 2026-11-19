@@ -1,4 +1,4 @@
-// Relay settings tests: encryption of the saved password, settings precedence, and the /api/smtp routes.
+﻿// Relay settings tests: encryption of the saved password, settings precedence, and the /api/smtp routes.
 // No email is sent. The relay is replaced by a fake.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,7 +25,7 @@ function fakeMailer() {
 }
 
 async function serve(store, mailer) {
-  const campaigns = new CampaignRunner(store, { mailer: () => mailer, sleep: async () => {} });
+  const campaigns = new CampaignRunner(store, { mailer: () => mailer, sleep: async () => {}, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   const app = createApp({ store, engine: { running: false, stop() {} }, token: TOKEN, origins: [], campaigns });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));

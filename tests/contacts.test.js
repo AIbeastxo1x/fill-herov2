@@ -1,4 +1,4 @@
-// Consented contacts tests: import rules, duplicate and do-not-email handling, and campaign recipients.
+﻿// Consented contacts tests: import rules, duplicate and do-not-email handling, and campaign recipients.
 // No email is sent. The relay is replaced by a fake.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -30,7 +30,7 @@ function fakeMailer() {
 }
 
 async function serve(store, mailer) {
-  const campaigns = new CampaignRunner(store, { mailer: () => mailer, sleep: async () => {} });
+  const campaigns = new CampaignRunner(store, { mailer: () => mailer, sleep: async () => {}, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   const app = createApp({ store, engine: { running: false, stop() {} }, token: TOKEN, origins: [], campaigns });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -123,7 +123,7 @@ test("campaign emails go only to consented contacts, not to addresses found on w
     contacts: [{ email: "jane@company.com", consentSource: "signup", consentDate: "2026-01-15" }],
   });
   const mailer = fakeMailer();
-  const runner = new CampaignRunner(store, { mailer, sleep: async () => {} });
+  const runner = new CampaignRunner(store, { mailer, sleep: async () => {}, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   assert.deepEqual(pendingRecipients(store.get()).map((r) => r.email), ["jane@company.com"]);
   runner.start({ dryRun: false });
   await runner.current;

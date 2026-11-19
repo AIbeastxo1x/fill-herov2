@@ -112,6 +112,11 @@ The same settings can come from the server's environment instead, used when noth
 in the page: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`. Also
 `EMAIL_GAP_SECONDS` (default 60) and `EMAIL_DAILY_CAP` (default 100).
 
+Each email has a one-click unsubscribe link and the matching mail-client header. Set
+`PUBLIC_BASE_URL` on the server to your Netlify site address, for example
+`https://fillhero.netlify.app`, or campaigns won't start. Opting out adds the address to the
+do-not-email list, and that address is never emailed again.
+
 Safety built in: dry run is on by default, each address is emailed once (Clear all keeps this),
 the do-not-email list is never sent to, every email has your name, company and postal address,
 and an opt-out line. A live send needs the postal address in the sender profile and a

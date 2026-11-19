@@ -26,7 +26,13 @@ const engine = new Engine(store, {
   launchOptions: { args: ["--no-sandbox", "--disable-dev-shm-usage"] }, // needed inside most containers
 });
 // The relay is read from the saved settings, falling back to environment variables.
-const campaigns = new CampaignRunner(store, { mailer: makeMailerSource(store, { token }), ...campaignLimitsFromEnv() });
+// PUBLIC_BASE_URL is the site address used in unsubscribe links, for example https://your-site.netlify.app
+const campaigns = new CampaignRunner(store, {
+  mailer: makeMailerSource(store, { token }),
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+  unsubscribeSecret: token,
+  ...campaignLimitsFromEnv(),
+});
 const app = createApp({ store, engine, token, origins, campaigns });
 
 const server = app.listen(port, () => {

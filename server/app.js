@@ -8,6 +8,10 @@ import { parseDomainList } from "../src/lib/normalize.js";
 import { buildEmailsFile, buildCaptchaFile } from "../src/lib/files.js";
 import { pendingRecipients } from "./campaign.js";
 import { encryptSecret } from "./mailer.js";
+import { readUnsubscribeToken } from "./unsubscribe.js";
+
+const UNSUBSCRIBE_PAGE = (title, text) =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><h1>${title}</h1><p>${text}</p></body></html>`;
 
 const campaignRecipientsCount = (state) => pendingRecipients(state).length;
 
@@ -150,6 +154,19 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
 
   app.get("/api/health", (req, res) => res.json({ ok: true }));
 
+  // Public, outside /api, so it needs no sign-in. Works from the link in each email, and from the
+  // List-Unsubscribe-Post button that mail clients show. Only a valid signed link can unsubscribe.
+  const unsubscribe = (req, res) => {
+    const email = readUnsubscribeToken(req.query.t, token);
+    res.type("html").set("cache-control", "no-store");
+    if (!email) return res.status(400).send(UNSUBSCRIBE_PAGE("Link not valid", "This unsubscribe link is not valid. Reply to the email and ask to be removed instead."));
+    const s = store.get();
+    if (!s.suppressed.includes(email)) store.set({ suppressed: [...s.suppressed, email] });
+    res.send(UNSUBSCRIBE_PAGE("You have been unsubscribed", "You will not receive further emails from this sender."));
+  };
+  app.get("/unsubscribe", unsubscribe);
+  app.post("/unsubscribe", unsubscribe);
+
   const expected = Buffer.from(token);
   app.use("/api", (req, res, next) => {
     const header = req.headers.authorization || "";
@@ -218,6 +235,7 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
     const failed = s.emailLog.filter((e) => e.status === "failed").length;
     res.json({
       configured: Boolean(campaigns?.configured()),
+      unsubscribeReady: Boolean(campaigns?.publicBaseUrl),
       running: Boolean(campaigns?.running),
       campaign: s.campaign,
       recipients: campaigns ? campaignRecipientsCount(s) : 0,
@@ -242,6 +260,7 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
       const s = store.get();
       if (!s.campaign.subject || !s.campaign.body) throw httpError(400, "write a subject and message first");
       if (!s.profile.address || !s.profile.city) throw httpError(400, "add your postal address and city in the sender profile first");
+      if (!campaigns.publicBaseUrl) throw httpError(400, "set PUBLIC_BASE_URL on the server (your Netlify site address) so unsubscribe links work");
       if (!isDry && !campaigns.configured()) throw httpError(400, "SMTP relay is not configured on the server");
       if (engine.running) throw httpError(409, "stop-the-run-first");
       const count = campaigns.start({ dryRun: isDry });

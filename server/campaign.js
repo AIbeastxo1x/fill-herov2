@@ -6,6 +6,8 @@
 //   - A gap between sends and a daily cap (EMAIL_GAP_SECONDS, EMAIL_DAILY_CAP).
 //   - Every email has the sender's name, company and postal address, and says how to opt out.
 //   - Live sends need a postal address in the sender profile, and a relay configured.
+import { unsubscribeUrl } from "./unsubscribe.js";
+
 export const EMAIL_LOG_LIMIT = 5000;
 
 const localDate = (date = new Date()) => {
@@ -18,7 +20,7 @@ export function fillTemplate(text, { domain = "", company = "" } = {}) {
 }
 
 // Builds the message. The footer carries the sender identity, the postal address and the opt-out line.
-export function composeEmail({ subject, body, profile, host, email, from }) {
+export function composeEmail({ subject, body, profile, host, email, from, unsubscribeUrl }) {
   const vars = { domain: host, company: profile.company || "" };
   const sender = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const who = [sender, profile.company].filter(Boolean).join(", ");
@@ -28,14 +30,18 @@ export function composeEmail({ subject, body, profile, host, email, from }) {
     "--",
     who,
     postal,
-    'To stop receiving these emails, reply with "unsubscribe" and you will not be contacted again.',
+    `To stop receiving these emails, open this link: ${unsubscribeUrl}`,
   ].join("\n");
   return {
     from,
     to: email,
     subject: fillTemplate(subject, vars),
     text: `${fillTemplate(body, vars)}\n${footer}`,
-    headers: { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` },
+    headers: {
+      // RFC 8058: mail clients can show an "Unsubscribe" button that posts to the link.
+      "List-Unsubscribe": `<${unsubscribeUrl}>, <mailto:${from}?subject=unsubscribe>`,
+      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+    },
   };
 }
 
@@ -58,9 +64,12 @@ export function pendingRecipients(state) {
 export class CampaignRunner {
   // store: from store.js. mailer: a function returning the current mailer ({ from, send(message) }) or null,
   // or a mailer object itself.
-  constructor(store, { mailer = null, gapMs = 60000, dailyCap = 100, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  // publicBaseUrl: the site address for unsubscribe links (PUBLIC_BASE_URL). unsubscribeSecret signs them.
+  constructor(store, { mailer = null, gapMs = 60000, dailyCap = 100, publicBaseUrl = "", unsubscribeSecret = "", sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
     this.store = store;
     this.mailerSource = typeof mailer === "function" ? mailer : () => mailer;
+    this.publicBaseUrl = publicBaseUrl;
+    this.unsubscribeSecret = unsubscribeSecret;
     this.gapMs = gapMs;
     this.dailyCap = dailyCap;
     this.sleep = sleep;
@@ -113,6 +122,7 @@ export class CampaignRunner {
     const campaign = this.store.get().campaign;
     const mailer = this.mailerSource();
     if (!dryRun && !mailer) return; // no relay configured: nothing is sent
+    if (!this.publicBaseUrl) return; // unsubscribe links need the site address
     const from = mailer?.from || "";
     for (let i = 0; i < recipients.length; i++) {
       if (this.stopRequested) break;
@@ -130,7 +140,15 @@ export class CampaignRunner {
         break;
       }
 
-      const message = composeEmail({ subject: campaign.subject, body: campaign.body, profile: this.store.get().profile, host, email, from });
+      const message = composeEmail({
+        subject: campaign.subject,
+        body: campaign.body,
+        profile: this.store.get().profile,
+        host,
+        email,
+        from,
+        unsubscribeUrl: unsubscribeUrl(this.publicBaseUrl, email, this.unsubscribeSecret),
+      });
       try {
         await mailer.send(message);
         this.record({ email, host, status: "sent" });

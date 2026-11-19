@@ -1,4 +1,4 @@
-// Email campaign tests. No email is sent: the relay is replaced by a fake that records messages.
+﻿// Email campaign tests. No email is sent: the relay is replaced by a fake that records messages.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -60,12 +60,15 @@ test("composed email fills the domain, adds the sender footer and an opt-out lin
     host: "a.com",
     email: "info@a.com",
     from: "outreach@example.com",
+    unsubscribeUrl: "https://site.example/unsubscribe?t=abc",
   });
   assert.equal(msg.subject, "Quote for a.com");
+  assert.equal(msg.headers["List-Unsubscribe-Post"], "List-Unsubscribe=One-Click");
+  assert.match(msg.headers["List-Unsubscribe"], /<https:\/\/site\.example\/unsubscribe\?t=abc>/);
   assert.match(msg.text, /Hello a\.com team\./);
   assert.match(msg.text, /Pat Tester, Acme/);
   assert.match(msg.text, /1 Main Street, Dublin, D01 X1Y2, Ireland/);
-  assert.match(msg.text, /reply with "unsubscribe"/);
+  assert.match(msg.text, /open this link: https:\/\/site\.example\/unsubscribe\?t=abc/);
   assert.equal(msg.to, "info@a.com");
 });
 
@@ -86,7 +89,7 @@ test("recipients are unique and skip addresses already sent or suppressed", () =
 test("a dry run composes every email and sends none", async () => {
   const store = await newStore();
   const mailer = fakeMailer();
-  const runner = new CampaignRunner(store, { mailer, sleep: noSleep });
+  const runner = new CampaignRunner(store, { mailer, sleep: noSleep, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   runner.start({ dryRun: true });
   await runner.current;
   assert.equal(mailer.sent.length, 0);
@@ -96,7 +99,7 @@ test("a dry run composes every email and sends none", async () => {
 test("a live run sends once to each address and never again", async () => {
   const store = await newStore();
   const mailer = fakeMailer();
-  const runner = new CampaignRunner(store, { mailer, sleep: noSleep });
+  const runner = new CampaignRunner(store, { mailer, sleep: noSleep, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   runner.start({ dryRun: false });
   await runner.current;
   assert.deepEqual(mailer.sent.map((m) => m.to), ["info@a.com", "sales@b.com", "hello@c.com"]);
@@ -110,7 +113,7 @@ test("a live run sends once to each address and never again", async () => {
 test("the do-not-email list is never sent to", async () => {
   const store = await newStore({ suppressed: ["info@a.com"] });
   const mailer = fakeMailer();
-  const runner = new CampaignRunner(store, { mailer, sleep: noSleep });
+  const runner = new CampaignRunner(store, { mailer, sleep: noSleep, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   runner.start({ dryRun: false });
   await runner.current;
   assert.ok(!mailer.sent.some((m) => m.to === "info@a.com"));
@@ -120,7 +123,7 @@ test("a failed send is recorded and the address is not marked as sent", async ()
   const store = await newStore({
     contacts: [{ email: "fail@d.com", consentSource: "test", consentDate: "2026-01-01" }],
   });
-  const runner = new CampaignRunner(store, { mailer: fakeMailer(), sleep: noSleep });
+  const runner = new CampaignRunner(store, { mailer: fakeMailer(), sleep: noSleep, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   runner.start({ dryRun: false });
   await runner.current;
   const entry = store.get().emailLog.find((e) => e.email === "fail@d.com");
@@ -132,7 +135,7 @@ test("a failed send is recorded and the address is not marked as sent", async ()
 test("the daily cap stops the run", async () => {
   const store = await newStore();
   const mailer = fakeMailer();
-  const runner = new CampaignRunner(store, { mailer, dailyCap: 2, sleep: noSleep });
+  const runner = new CampaignRunner(store, { mailer, dailyCap: 2, sleep: noSleep, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   runner.start({ dryRun: false });
   await runner.current;
   assert.equal(mailer.sent.length, 2);
@@ -148,7 +151,7 @@ test("the gap is read from the environment with safe defaults", () => {
 // ---------- routes ----------
 
 async function serve(store, mailer) {
-  const campaigns = new CampaignRunner(store, { mailer, sleep: noSleep });
+  const campaigns = new CampaignRunner(store, { mailer, sleep: noSleep, publicBaseUrl: "https://site.example", unsubscribeSecret: "test-secret-0123456789abcdef" });
   const app = createApp({ store, engine: { running: false, stop() {} }, token: TOKEN, origins: [], campaigns });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, "127.0.0.1", () => resolve(s));

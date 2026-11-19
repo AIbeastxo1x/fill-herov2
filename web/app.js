@@ -142,9 +142,11 @@ async function refreshCampaign() {
     const c = await (await api("/campaign")).json();
     if (document.activeElement !== $("c-subject")) $("c-subject").value = c.campaign.subject;
     if (document.activeElement !== $("c-body")) $("c-body").value = c.campaign.body;
-    $("campaign-config").textContent = c.configured
+    let cfg = c.configured
       ? `Relay connected. At most ${c.dailyCap} emails a day, ${c.gapSeconds} seconds apart.`
       : "No email relay is set up on the server yet, so only dry runs are possible.";
+    if (!c.unsubscribeReady) cfg += " Unsubscribe links are not set up: the server needs PUBLIC_BASE_URL.";
+    $("campaign-config").textContent = cfg;
     $("campaign-running").textContent = c.running ? "Sending…" : "";
     $("campaign-start").disabled = c.running;
     $("campaign-stop").disabled = !c.running;
