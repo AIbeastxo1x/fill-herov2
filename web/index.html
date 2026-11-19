@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fill Hero</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>Fill Hero</h1>
+  <span id="status" class="pill">Not connected</span>
+</header>
+
+<main>
+  <section class="card" id="connection">
+    <h2>Connection</h2>
+    <label>Server address
+      <input id="api-base" type="url" placeholder="https://your-server.example.com" autocomplete="off">
+    </label>
+    <label>Access token
+      <input id="token" type="password" placeholder="Paste your token" autocomplete="off">
+    </label>
+    <div class="row">
+      <button id="connect" class="primary">Connect</button>
+      <span id="connect-msg" class="help"></span>
+    </div>
+  </section>
+
+  <section class="card" id="run-card" hidden>
+    <h2>Run</h2>
+    <p class="help">Domains or contact-page links, one per line. Commas also work.</p>
+    <textarea id="domains" rows="6" placeholder="example.com&#10;https://www.example.org/contact"></textarea>
+    <div class="row wrap">
+      <label class="check"><input id="dryrun" type="checkbox" checked> Dry run (fill, never submit)</label>
+    </div>
+    <div class="row wrap">
+      <button id="start" class="primary">Start</button>
+      <button id="stop">Stop</button>
+      <span id="running" class="status"></span>
+    </div>
+    <p class="help" id="run-help"></p>
+  </section>
+
+  <section class="card" id="report-card" hidden>
+    <h2>Run report</h2>
+    <table class="report"><tbody id="summary"></tbody></table>
+    <p class="help" id="cap"></p>
+  </section>
+
+  <section class="card" id="profile-card" hidden>
+    <h2>Sender profile</h2>
+    <div class="grid">
+      <label>First name <input id="p-firstName" type="text"></label>
+      <label>Last name <input id="p-lastName" type="text"></label>
+      <label>Company <input id="p-company" type="text"></label>
+      <label>Email <input id="p-email" type="email"></label>
+      <label>Phone <input id="p-phone" type="tel"></label>
+      <label>Subject <input id="p-subject" type="text"></label>
+      <label>Job title <input id="p-jobTitle" type="text"></label>
+      <label>Country <input id="p-country" type="text"></label>
+      <label>Address <input id="p-address" type="text"></label>
+      <label>City <input id="p-city" type="text"></label>
+      <label>State / Province <input id="p-state" type="text"></label>
+      <label>ZIP / Postal code <input id="p-zip" type="text"></label>
+    </div>
+    <label>Message template</label>
+    <textarea id="p-template" rows="5"></textarea>
+    <p class="help">{domain} is the target domain, {company} is your company.</p>
+    <div class="row"><button id="save-profile" class="primary">Save profile</button><span id="profile-msg" class="help"></span></div>
+  </section>
+
+  <section class="card" id="files-card" hidden>
+    <h2>Files</h2>
+    <table class="report"><tbody>
+      <tr><td>extractedemails.txt</td><td class="num" id="email-count"></td></tr>
+      <tr><td>captcha_domains.txt</td><td class="num" id="captcha-count"></td></tr>
+      <tr><td>Domains already sent to</td><td class="num" id="sent-count"></td></tr>
+    </tbody></table>
+    <div class="row wrap">
+      <button id="dl-emails">Download extractedemails.txt</button>
+      <button id="dl-captcha">Download captcha_domains.txt</button>
+    </div>
+  </section>
+
+  <section class="card danger-card" id="reset-card" hidden>
+    <h2>Reset</h2>
+    <p class="help">Clears the report counts, queue, extracted emails and CAPTCHA list. Your profile and the list of domains already sent to are kept, so those are never contacted again.</p>
+    <button id="clear-all" class="danger">Clear all</button>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

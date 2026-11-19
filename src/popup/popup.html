@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fill Hero v2</title>
+<style>
+  body { font: 13px system-ui, sans-serif; width: 460px; margin: 0; padding: 12px; color: #1d1d1f; background: #fff; }
+  h2 { font-size: 14px; margin: 14px 0 6px; }
+  textarea, input[type=text], input[type=email], input[type=tel] { width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 5px; }
+  textarea { min-height: 70px; }
+  label { display: block; font-size: 12px; color: #555; }
+  .row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  button { padding: 5px 10px; cursor: pointer; }
+  .help { color: #666; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  td, th { border-bottom: 1px solid #eee; padding: 3px 4px; text-align: left; vertical-align: top; }
+  .status { font-weight: 600; }
+  .scroll { max-height: 160px; overflow: auto; }
+  table.report { width: 60%; border: 1px solid #ccc; }
+  table.report td { border-bottom: 1px solid #ddd; font-size: 12px; }
+  table.report td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  button.danger { color: #b00020; border-color: #b00020; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #f2f2f2; background: #1e1e1e; }
+    label, .help { color: #aaa; }
+    textarea, input[type=text], input[type=email], input[type=tel] { background: #2a2a2a; color: #f2f2f2; border: 1px solid #444; }
+    td, th { border-color: #333; }
+  }
+</style>
+</head>
+<body>
+  <h2>Domains</h2>
+  <textarea id="domains" placeholder="one domain per line, or comma separated"></textarea>
+  <div class="row">
+    <input type="file" id="csv" accept=".csv,.txt">
+  </div>
+
+  <h2>Sender profile</h2>
+  <label>First name <input type="text" id="p-first"></label>
+  <label>Last name <input type="text" id="p-last"></label>
+  <label>Company <input type="text" id="p-company"></label>
+  <label>Email <input type="email" id="p-email"></label>
+  <label>Phone <input type="tel" id="p-phone"></label>
+  <label>Subject <input type="text" id="p-subject"></label>
+  <label>Job title <input type="text" id="p-job"></label>
+  <label>Country <input type="text" id="p-country"></label>
+  <label>Address <input type="text" id="p-address"></label>
+  <label>City <input type="text" id="p-city"></label>
+  <label>State / Province <input type="text" id="p-state"></label>
+  <label>ZIP / Postal code <input type="text" id="p-zip"></label>
+  <label>Message template</label>
+  <textarea id="p-template"></textarea>
+  <div class="help">{domain} = the target domain, {company} = your company.</div>
+
+  <h2>Run</h2>
+  <div class="row">
+    <label><input type="checkbox" id="dryrun"> Dry run (fill, never submit)</label>
+  </div>
+  <div class="row">
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+    <span id="running" class="status"></span>
+  </div>
+
+
+  <h2>Run report</h2>
+  <table class="report"><tbody id="summary"></tbody></table>
+  <div class="help" id="cap"></div>
+
+  <h2>Files</h2>
+  <div class="help">Saved to your Downloads folder, in the FillHero subfolder. Each save replaces the file. Files also refresh at the end of every run.</div>
+  <table class="report"><tbody>
+    <tr><td>extractedemails.txt</td><td class="num" id="email-count"></td></tr>
+    <tr><td>captcha_domains.txt</td><td class="num" id="captcha-count"></td></tr>
+    <tr><td>Sent domains remembered</td><td class="num" id="sent-count"></td></tr>
+  </tbody></table>
+  <div class="row">
+    <button id="save-emails">Save extractedemails.txt</button>
+    <button id="save-captcha">Save captcha_domains.txt</button>
+  </div>
+  <div class="row"><button id="export-emails">Export emails CSV</button></div>
+
+  <h2>Reset</h2>
+  <div class="help">Clears the log, review queue, extracted emails and CAPTCHA list. Keeps your profile, domains and the sent-domain record, so sent domains are still never contacted again.</div>
+  <div class="row"><button id="clear-all" class="danger">Clear all</button></div>
+
+
+<script src="popup.js"></script>
+</body>
+</html>

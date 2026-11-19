@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Fill Hero v2",
+  "version": "0.1.0",
+  "description": "Works through opted-in business domains, fills contact forms, and submits high-confidence ones at a rate limit. Everything else goes to a review queue.",
+  "permissions": ["tabs", "storage", "scripting", "activeTab", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html"
+  }
+}

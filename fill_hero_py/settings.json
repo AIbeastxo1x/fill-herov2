@@ -1,0 +1,32 @@
+{
+  "profile": {
+    "firstName": "Your",
+    "lastName": "Name",
+    "company": "Your Company",
+    "email": "you@example.com",
+    "phone": "",
+    "subject": "Enquiry",
+    "jobTitle": "",
+    "country": "",
+    "address": "",
+    "template": "Hello {domain} team,\n\nWe would like to talk to you about working together.\n\nKind regards,\n{company}"
+  },
+  "run": {
+    "dry_run": true,
+    "headless": false,
+    "gap_seconds": 60,
+    "daily_cap": 50,
+    "max_tabs": 5,
+    "max_contact_pages": 3,
+    "page_timeout_seconds": 20,
+    "random_delay_seconds": [2, 5]
+  },
+  "files": {
+    "domains": "domains.txt",
+    "message": "message.txt",
+    "log": "output/log.csv",
+    "state": "output/state.json",
+    "queue": "output/queue.json",
+    "browser_profile": "output/browser-profile"
+  }
+}

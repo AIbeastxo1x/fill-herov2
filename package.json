@@ -1,0 +1,14 @@
+{
+  "name": "fill-hero-v2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "^1.65.1"
+  }
+}

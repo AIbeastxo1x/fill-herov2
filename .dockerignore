@@ -1,0 +1,11 @@
+node_modules
+data
+tests
+test-site
+fill_hero_py
+docs
+web
+manifest.json
+*.log
+fill-hero-design.md
+.git

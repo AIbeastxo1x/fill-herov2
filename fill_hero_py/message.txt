@@ -1,0 +1,6 @@
+Hello {domain} team,
+
+We would like to talk to you about working together.
+
+Kind regards,
+{company}

@@ -1,0 +1,5 @@
+# One domain or contact-page URL per line. Lines starting with # are ignored.
+https://www.cableplan.ie/contact
+https://www.bbeinc.com/contact
+enag.fr
+persiehl.de
