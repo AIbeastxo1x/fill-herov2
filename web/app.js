@@ -5,6 +5,23 @@ const PROFILE_KEYS = ["firstName", "lastName", "company", "email", "phone", "sub
 const SIGNED_OUT = "Signed out";
 
 let timer = null;
+let dryRunLoaded = false; // the dry-run box is set from the server once, then only the user changes it
+
+// Fields the user has typed in and not saved yet. The 3-second refresh must not overwrite them.
+const edited = new Set();
+document.addEventListener("input", (e) => { if (e.target.id) edited.add(e.target.id); });
+document.addEventListener("change", (e) => { if (e.target.id) edited.add(e.target.id); });
+function setField(id, value) {
+  if (!edited.has(id)) $(id).value = value;
+}
+function markSaved(...ids) {
+  for (const id of ids) edited.delete(id);
+}
+function updateRunHelp() {
+  $("run-help").textContent = $("dryrun").checked
+    ? "Dry run is on: forms are filled and checked, nothing is submitted."
+    : "Live run: real messages will be submitted. Check the dry run first.";
+}
 
 async function api(route, { method = "GET", body } = {}) {
   const res = await fetch(`/api${route}`, {
@@ -35,20 +52,18 @@ function showCards(visible) {
 }
 
 function fillProfile(profile) {
-  for (const key of PROFILE_KEYS) {
-    const el = $(`p-${key}`);
-    if (document.activeElement !== el) el.value = profile[key] ?? "";
-  }
+  for (const key of PROFILE_KEYS) setField(`p-${key}`, profile[key] ?? "");
 }
 
 function renderState(s) {
   $("running").textContent = s.running ? "Running…" : "";
   $("stop").disabled = !s.running;
   $("start").disabled = s.running;
-  $("dryrun").checked = !!s.dryRun;
-  $("run-help").textContent = s.dryRun
-    ? "Dry run is on: forms are filled and checked, nothing is submitted."
-    : "Live run: real messages will be submitted. Check the dry run first.";
+  if (!dryRunLoaded) {
+    $("dryrun").checked = !!s.dryRun;
+    dryRunLoaded = true;
+    updateRunHelp();
+  }
 
   const sm = s.summary;
   const rows = [
@@ -187,8 +202,8 @@ $("clear-contacts").addEventListener("click", async () => {
 async function refreshCampaign() {
   try {
     const c = await (await api("/campaign")).json();
-    if (document.activeElement !== $("c-subject")) $("c-subject").value = c.campaign.subject;
-    if (document.activeElement !== $("c-body")) $("c-body").value = c.campaign.body;
+    setField("c-subject", c.campaign.subject);
+    setField("c-body", c.campaign.body);
     let cfg = c.configured
       ? `Relay connected. At most ${c.dailyCap} emails a day, ${c.gapSeconds} seconds apart.`
       : "No email relay is set up on the server yet, so only dry runs are possible.";
@@ -209,10 +224,10 @@ async function refreshCampaign() {
 // ---------- relay settings ----------
 
 function renderSmtp(s) {
-  if (document.activeElement !== $("s-host")) $("s-host").value = s.host;
-  if (document.activeElement !== $("s-port")) $("s-port").value = s.port;
-  if (document.activeElement !== $("s-user")) $("s-user").value = s.user;
-  if (document.activeElement !== $("s-from")) $("s-from").value = s.from;
+  setField("s-host", s.host);
+  setField("s-port", s.port);
+  setField("s-user", s.user);
+  setField("s-from", s.from);
   $("smtp-source").textContent = s.configured
     ? `Connected to ${s.host} (settings from ${s.source === "settings" ? "this page" : "the server's environment"}).`
     : "Not set up yet. Enter the relay details below and save.";
@@ -243,6 +258,7 @@ $("save-smtp").addEventListener("click", async () => {
   $("smtp-msg").textContent = "Saving…";
   try {
     const r = await api("/smtp", { method: "PUT", body: smtpPayload({ password: $("s-pass").value }) });
+    markSaved("s-host", "s-port", "s-user", "s-from");
     renderSmtp(await r.json());
     $("s-pass").value = "";
     $("smtp-msg").textContent = "Saved.";
@@ -256,6 +272,7 @@ $("clear-pass").addEventListener("click", async () => {
   if (!confirm("Remove the saved relay password? Live sending will stop until a password is saved again.")) return;
   try {
     const r = await api("/smtp", { method: "PUT", body: smtpPayload({ clearPassword: true }) });
+    markSaved("s-host", "s-port", "s-user", "s-from");
     renderSmtp(await r.json());
     $("smtp-msg").textContent = "Saved password removed.";
   } catch (err) {
@@ -278,6 +295,7 @@ $("test-smtp").addEventListener("click", async () => {
 $("save-campaign").addEventListener("click", async () => {
   try {
     await api("/campaign", { method: "PUT", body: { subject: $("c-subject").value, body: $("c-body").value } });
+    markSaved("c-subject", "c-body");
     $("campaign-msg").textContent = "Saved.";
   } catch (err) {
     if (err.message !== SIGNED_OUT) $("campaign-msg").textContent = `Not saved: ${err.message}`;
@@ -330,6 +348,7 @@ function signedOut(message = "") {
 }
 
 async function signedIn() {
+  dryRunLoaded = false; // read the server's dry-run setting again after signing in
   $("login-card").hidden = true;
   $("logout").hidden = false;
   showCards(true);
@@ -377,6 +396,7 @@ $("save-profile").addEventListener("click", async () => {
   for (const key of PROFILE_KEYS) profile[key] = $(`p-${key}`).value;
   try {
     await api("/profile", { method: "PUT", body: profile });
+    markSaved(...PROFILE_KEYS.map((k) => `p-${k}`));
     $("profile-msg").textContent = "Saved.";
   } catch (err) {
     if (err.message !== SIGNED_OUT) $("profile-msg").textContent = `Not saved: ${err.message}`;
@@ -403,12 +423,7 @@ $("stop").addEventListener("click", async () => {
   refresh();
 });
 
-$("dryrun").addEventListener("change", () => {
-  // The next run uses whichever box is ticked when Start is pressed.
-  $("run-help").textContent = $("dryrun").checked
-    ? "Dry run is on: forms are filled and checked, nothing is submitted."
-    : "Live run: real messages will be submitted. Check the dry run first.";
-});
+$("dryrun").addEventListener("change", updateRunHelp); // the next run uses whichever box is ticked when Start is pressed
 
 // ---------- files ----------
 
