@@ -85,6 +85,34 @@
     </div>
   </section>
 
+  <section class="card" id="campaign-card" hidden>
+    <h2>Email campaign</h2>
+    <p class="help" id="campaign-config"></p>
+    <label>Subject <input id="c-subject" type="text"></label>
+    <label>Message <textarea id="c-body" rows="6"></textarea></label>
+    <p class="help">{domain} is the target domain, {company} is your company. Your name, company, postal address and an opt-out line are added to every email.</p>
+    <div class="row"><button id="save-campaign" class="primary">Save message</button><span id="campaign-msg" class="help"></span></div>
+    <div class="row wrap">
+      <label class="check"><input id="c-dryrun" type="checkbox" checked> Dry run (compose only, send nothing)</label>
+    </div>
+    <div class="row wrap">
+      <button id="campaign-start" class="primary">Start campaign</button>
+      <button id="campaign-stop">Stop</button>
+      <span id="campaign-running" class="status"></span>
+    </div>
+    <p class="help" id="campaign-help"></p>
+    <table class="report"><tbody>
+      <tr><td>Addresses waiting</td><td class="num" id="c-recipients"></td></tr>
+      <tr><td>Emails sent</td><td class="num" id="c-sent"></td></tr>
+      <tr><td>Failed</td><td class="num" id="c-failed"></td></tr>
+      <tr><td>On the do-not-email list</td><td class="num" id="c-suppressed"></td></tr>
+    </tbody></table>
+    <label>Add to the do-not-email list (one per line or comma-separated)
+      <textarea id="c-suppress" rows="3"></textarea>
+    </label>
+    <div class="row"><button id="add-suppress">Add to do-not-email</button><span id="suppress-msg" class="help"></span></div>
+  </section>
+
   <section class="card danger-card" id="reset-card" hidden>
     <h2>Reset</h2>
     <p class="help">Clears the report counts, queue, extracted emails and CAPTCHA list. Your profile and the list of domains already sent to are kept, so those are never contacted again.</p>

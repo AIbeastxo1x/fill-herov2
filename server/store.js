@@ -31,6 +31,10 @@ export const DEFAULTS = {
   dailyDate: "",
   lastSubmitAt: 0,
   dryRun: true, // safe default: fill but never submit
+  campaign: { subject: "", body: "" }, // the email campaign's inquiry message
+  emailLog: [], // one entry per address the campaign handled; kept by Clear all so no address is emailed twice
+  suppressed: [], // do-not-email list: addresses that must never be emailed
+  emailDaily: { date: "", count: 0 }, // emails sent today, for the daily cap
 };
 
 export function createStore(dir) {

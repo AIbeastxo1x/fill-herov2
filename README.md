@@ -96,6 +96,21 @@ never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed f
   messages go out in English, and the log says so.
 - **Dates** use the server's time zone. Set `TZ` on the host if you want your local day.
 
+## Email campaign
+
+The email card sends one inquiry email to each address the domain run extracted. It uses an
+SMTP relay you set up with your own provider. Set these on the server (Render), as secrets:
+
+- `SMTP_HOST`, `SMTP_PORT` (default 587), `SMTP_USER`, `SMTP_PASS`
+- `EMAIL_FROM`: the sender address your relay has verified
+- `EMAIL_GAP_SECONDS` (default 60) and `EMAIL_DAILY_CAP` (default 100)
+
+Safety built in: dry run is on by default, each address is emailed once (Clear all keeps this),
+the do-not-email list is never sent to, every email has your name, company and postal address,
+and an opt-out line. A live send needs the postal address in the sender profile and a
+confirmation in the page. Only email people who have agreed to be contacted. Opt-outs are
+recorded by adding the address to the do-not-email list; replies are not read automatically.
+
 ## Tests
 
 ```powershell

@@ -31,7 +31,7 @@ function setStatus(text, ok) {
 }
 
 function showCards(visible) {
-  for (const id of ["run-card", "report-card", "profile-card", "files-card", "reset-card"]) $(id).hidden = !visible;
+  for (const id of ["run-card", "report-card", "profile-card", "files-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
 }
 
 function fillProfile(profile) {
@@ -75,8 +75,74 @@ async function refresh() {
     setStatus("Connected", true);
   } catch (err) {
     if (err.message !== SIGNED_OUT) setStatus(`Error: ${err.message}`, false);
+    return;
+  }
+  await refreshCampaign();
+}
+
+// ---------- email campaign ----------
+
+async function refreshCampaign() {
+  try {
+    const c = await (await api("/campaign")).json();
+    if (document.activeElement !== $("c-subject")) $("c-subject").value = c.campaign.subject;
+    if (document.activeElement !== $("c-body")) $("c-body").value = c.campaign.body;
+    $("campaign-config").textContent = c.configured
+      ? `Relay connected. At most ${c.dailyCap} emails a day, ${c.gapSeconds} seconds apart.`
+      : "No email relay is set up on the server yet, so only dry runs are possible.";
+    $("campaign-running").textContent = c.running ? "Sending…" : "";
+    $("campaign-start").disabled = c.running;
+    $("campaign-stop").disabled = !c.running;
+    $("c-recipients").textContent = c.recipients;
+    $("c-sent").textContent = c.sent;
+    $("c-failed").textContent = c.failed;
+    $("c-suppressed").textContent = c.suppressed;
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("campaign-help").textContent = `Could not load the campaign: ${err.message}`;
   }
 }
+
+$("save-campaign").addEventListener("click", async () => {
+  try {
+    await api("/campaign", { method: "PUT", body: { subject: $("c-subject").value, body: $("c-body").value } });
+    $("campaign-msg").textContent = "Saved.";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("campaign-msg").textContent = `Not saved: ${err.message}`;
+  }
+});
+
+$("campaign-start").addEventListener("click", async () => {
+  const dryRun = $("c-dryrun").checked;
+  const count = Number($("c-recipients").textContent) || 0;
+  if (!dryRun && !confirm(`This will send a real email to up to ${count} addresses, one at a time, with the gap and daily cap set on the server. Only continue if these recipients have agreed to be contacted. Continue?`)) return;
+  try {
+    const r = await api("/campaign/start", { method: "POST", body: { dryRun } });
+    const data = await r.json();
+    $("campaign-help").textContent = data.dryRun ? `Dry run started for ${data.recipients} addresses. Nothing is sent.` : `Live campaign started for ${data.recipients} addresses.`;
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) alert(`Could not start: ${err.message}`);
+  }
+  refreshCampaign();
+});
+
+$("campaign-stop").addEventListener("click", async () => {
+  await api("/campaign/stop", { method: "POST" }).catch(() => {});
+  refreshCampaign();
+});
+
+$("add-suppress").addEventListener("click", async () => {
+  const emails = $("c-suppress").value;
+  if (!emails.trim()) return;
+  try {
+    const r = await api("/campaign/suppress", { method: "POST", body: { emails } });
+    const data = await r.json();
+    $("suppress-msg").textContent = `Saved. ${data.suppressed} addresses on the list.`;
+    $("c-suppress").value = "";
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("suppress-msg").textContent = `Not saved: ${err.message}`;
+  }
+  refreshCampaign();
+});
 
 // ---------- sign in / out ----------
 

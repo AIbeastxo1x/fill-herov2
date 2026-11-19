@@ -6,6 +6,9 @@ import { DEFAULT_PROFILE } from "./store.js";
 import { LIMITS } from "./engine.js";
 import { parseDomainList } from "../src/lib/normalize.js";
 import { buildEmailsFile, buildCaptchaFile } from "../src/lib/files.js";
+import { pendingRecipients } from "./campaign.js";
+
+const campaignRecipientsCount = (state) => pendingRecipients(state).length;
 
 const PROFILE_KEYS = Object.keys(DEFAULT_PROFILE);
 const MAX_FIELD = 500;
@@ -47,7 +50,25 @@ export function summarize(s) {
   };
 }
 
-export function createApp({ store, engine, token, origins = [] }) {
+const MAX_SUBJECT = 200;
+const MAX_BODY = 5000;
+
+function cleanCampaign(input) {
+  if (!input || typeof input !== "object") throw httpError(400, "campaign must be an object");
+  const { subject = "", body = "" } = input;
+  if (typeof subject !== "string" || typeof body !== "string") throw httpError(400, "subject and body must be text");
+  if (subject.length > MAX_SUBJECT) throw httpError(400, "subject is too long");
+  if (body.length > MAX_BODY) throw httpError(400, "body is too long");
+  return { subject: subject.trim(), body };
+}
+
+// Lowercased addresses from free text: one per line, or separated by commas, spaces or semicolons.
+function parseAddresses(text) {
+  const found = String(text || "").toLowerCase().split(/[\s,;]+/).filter((s) => s.includes("@") && s.length <= 254);
+  return [...new Set(found)];
+}
+
+export function createApp({ store, engine, token, origins = [], campaigns = null }) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "300kb" }));
@@ -125,6 +146,65 @@ export function createApp({ store, engine, token, origins = [] }) {
     // Clears the working data. sentHosts is kept, so a sent domain is never contacted again.
     store.set({ log: [], queue: [], emails: [], captchaDomains: [] });
     res.json({ ok: true });
+  });
+
+  // ---------- email campaign ----------
+
+  app.get("/api/campaign", (req, res) => {
+    const s = store.get();
+    const sent = s.emailLog.filter((e) => e.status === "sent").length;
+    const failed = s.emailLog.filter((e) => e.status === "failed").length;
+    res.json({
+      configured: Boolean(campaigns?.configured()),
+      running: Boolean(campaigns?.running),
+      campaign: s.campaign,
+      recipients: campaigns ? campaignRecipientsCount(s) : 0,
+      sent,
+      failed,
+      suppressed: s.suppressed.length,
+      dailyCap: campaigns?.dailyCap ?? 0,
+      gapSeconds: campaigns ? campaigns.gapMs / 1000 : 0,
+    });
+  });
+
+  app.put("/api/campaign", (req, res) => {
+    store.set({ campaign: cleanCampaign(req.body) });
+    res.json({ ok: true });
+  });
+
+  app.post("/api/campaign/start", (req, res, next) => {
+    try {
+      if (!campaigns) throw httpError(500, "campaigns-unavailable");
+      const { dryRun } = req.body ?? {};
+      const isDry = dryRun !== false; // only an explicit false starts a live send
+      const s = store.get();
+      if (!s.campaign.subject || !s.campaign.body) throw httpError(400, "write a subject and message first");
+      if (!s.profile.address || !s.profile.city) throw httpError(400, "add your postal address and city in the sender profile first");
+      if (!isDry && !campaigns.configured()) throw httpError(400, "SMTP relay is not configured on the server");
+      if (engine.running) throw httpError(409, "stop-the-run-first");
+      const count = campaigns.start({ dryRun: isDry });
+      if (count === 0) throw httpError(400, "no addresses to email");
+      res.status(202).json({ ok: true, recipients: count, dryRun: isDry });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/campaign/stop", (req, res) => {
+    campaigns?.stop();
+    res.json({ ok: true });
+  });
+
+  app.post("/api/campaign/suppress", (req, res, next) => {
+    try {
+      const list = parseAddresses(req.body?.emails);
+      if (list.length === 0) throw httpError(400, "no valid addresses given");
+      const suppressed = [...new Set([...store.get().suppressed, ...list])];
+      store.set({ suppressed });
+      res.json({ ok: true, suppressed: suppressed.length });
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.get("/api/files/emails.txt", (req, res) => {

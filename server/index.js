@@ -7,6 +7,8 @@ import path from "node:path";
 import { createStore } from "./store.js";
 import { Engine } from "./engine.js";
 import { createApp } from "./app.js";
+import { CampaignRunner, campaignLimitsFromEnv } from "./campaign.js";
+import { mailerFromEnv } from "./mailer.js";
 
 const token = process.env.FILLHERO_TOKEN || "";
 if (token.length < 24) {
@@ -23,7 +25,8 @@ await store.load();
 const engine = new Engine(store, {
   launchOptions: { args: ["--no-sandbox", "--disable-dev-shm-usage"] }, // needed inside most containers
 });
-const app = createApp({ store, engine, token, origins });
+const campaigns = new CampaignRunner(store, { mailer: mailerFromEnv(), ...campaignLimitsFromEnv() });
+const app = createApp({ store, engine, token, origins, campaigns });
 
 const server = app.listen(port, () => {
   console.log(`Fill Hero API listening on port ${port}; data in ${dataDir}; origins: ${origins.join(", ") || "none"}`);
@@ -33,6 +36,7 @@ const server = app.listen(port, () => {
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, async () => {
     engine.stop();
+    campaigns.stop();
     server.close();
     await store.flush();
     process.exit(0);
