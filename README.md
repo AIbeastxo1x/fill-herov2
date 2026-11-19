@@ -71,13 +71,16 @@ $b = New-Object byte[] 36; [System.Security.Cryptography.RandomNumberGenerator]:
 
 ## 3. Deploy the front end (Netlify)
 
-1. Open `web/config.js` and set `window.FILLHERO_API_BASE` to your server address, for example
-   `https://fill-hero.example.com`.
-2. Deploy the project to Netlify. `netlify.toml` already publishes the `web/` folder.
-3. Use the Netlify address as `ALLOWED_ORIGINS` on the server, then restart the server.
+1. Deploy the project to Netlify. `netlify.toml` publishes the `web/` folder, and the
+   `netlify/functions/` folder runs the sign-in and the proxy to the server.
+2. In Netlify, go to **Site configuration → Environment variables** and add:
+   - `FILLHERO_SERVER_URL`: your server address, for example `https://fill-herov2.onrender.com`.
+   - `FILLHERO_TOKEN`: the same token as on the server.
+   - `SITE_PASSWORD`: the password you will type to sign in to the page. Choose a long one.
+3. Redeploy the site so the variables take effect.
 
-The token is typed in the page and kept only in that browser. It is never stored in the
-published files.
+The page asks for `SITE_PASSWORD`. The server token stays inside Netlify's functions and is
+never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed for the page.
 
 ## Files and downloads
 

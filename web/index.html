@@ -9,22 +9,24 @@
 <body>
 <header class="top">
   <h1>Fill Hero</h1>
-  <span id="status" class="pill">Not connected</span>
+  <span class="row">
+    <span id="status" class="pill">Not connected</span>
+    <button id="logout" hidden>Sign out</button>
+  </span>
 </header>
 
 <main>
-  <section class="card" id="connection">
-    <h2>Connection</h2>
-    <label>Server address
-      <input id="api-base" type="url" placeholder="https://your-server.example.com" autocomplete="off">
-    </label>
-    <label>Access token
-      <input id="token" type="password" placeholder="Paste your token" autocomplete="off">
-    </label>
-    <div class="row">
-      <button id="connect" class="primary">Connect</button>
-      <span id="connect-msg" class="help"></span>
-    </div>
+  <section class="card" id="login-card" hidden>
+    <h2>Sign in</h2>
+    <form id="login-form">
+      <label>Password
+        <input id="password" type="password" autocomplete="current-password">
+      </label>
+      <div class="row">
+        <button id="login" class="primary" type="submit">Sign in</button>
+        <span id="login-msg" class="help"></span>
+      </div>
+    </form>
   </section>
 
   <section class="card" id="run-card" hidden>
@@ -90,7 +92,6 @@
   </section>
 </main>
 
-<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
