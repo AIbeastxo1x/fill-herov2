@@ -23,6 +23,18 @@ test("the protected build passes the same extension run scenarios", async () => 
 
 // The names of the licence check and the run logic are hidden. Data keys such as "sentHosts" are
 // still visible, because renaming them would change what is saved in the browser.
+test("the extension computes the same build fingerprint as the build script", async () => {
+  const { fingerprint, FINGERPRINT_FILES } = await import("../scripts/build-extension.js");
+  const dir = path.join(ROOT, "dist", "extension");
+  await buildExtension();
+  // The same steps the extension runs in the browser (background.js, buildFingerprint).
+  const texts = [];
+  for (const f of FINGERPRINT_FILES) texts.push(await fs.readFile(path.join(dir, f), "utf8"));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(texts.join("\n--fillhero--\n")));
+  const inBrowserStyle = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  assert.equal(inBrowserStyle, await fingerprint(dir));
+});
+
 test("the shipped files do not show the readable names of the licence and run logic", async () => {
   const bg = await fs.readFile(path.join(ROOT, "dist", "extension", "background.js"), "utf8");
   const popup = await fs.readFile(path.join(ROOT, "dist", "extension", "popup", "popup.js"), "utf8");

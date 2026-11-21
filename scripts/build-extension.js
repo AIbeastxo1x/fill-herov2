@@ -2,6 +2,7 @@
 // The background script is bundled into one file and obfuscated; so are the popup and page script.
 // The readable source stays in extension/ and is never shipped. Run `npm run build:extension` first.
 import { promises as fs } from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
@@ -13,6 +14,7 @@ const OUT = path.join(ROOT, "dist", "extension");
 
 // Strong enough to stop casual reading and copying. It is not unbreakable: see HARNESS.md.
 const OBFUSCATION = {
+  seed: 20260101, // fixed, so the same source always gives the same build and fingerprint
   compact: true,
   controlFlowFlattening: true,
   controlFlowFlatteningThreshold: 0.5,
@@ -55,7 +57,18 @@ export async function buildExtension() {
   return OUT;
 }
 
+// Fingerprint of the shipped scripts. The extension sends it with its licence key, and the server
+// accepts only fingerprints listed in APPROVED_BUILDS. The same bytes give the same fingerprint.
+export const FINGERPRINT_FILES = ["background.js", "content.js", "popup/popup.js"];
+export async function fingerprint(dir) {
+  const parts = [];
+  for (const f of FINGERPRINT_FILES) parts.push(await fs.readFile(path.join(dir, f), "utf8"));
+  return crypto.createHash("sha256").update(parts.join("\n--fillhero--\n"), "utf8").digest("hex");
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const out = await buildExtension();
   console.log(`protected extension built in ${path.relative(ROOT, out)}`);
+  console.log(`build fingerprint: ${await fingerprint(out)}`);
+  console.log("Add this fingerprint to APPROVED_BUILDS on the server to accept this build.");
 }

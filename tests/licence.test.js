@@ -104,6 +104,28 @@ test("verify needs no token, but admin routes do", async () => {
   }
 });
 
+test("with APPROVED_BUILDS set, only an approved build gets a valid answer", async () => {
+  const store = await newStore();
+  const campaigns = new CampaignRunner(store, { mailer: () => null, sleep: async () => {} });
+  const app = createApp({ store, engine: { running: false, stop() {} }, token: TOKEN, origins: [], campaigns, approvedBuilds: ["APPROVED1"] });
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const verify = (body) =>
+    fetch(`${base}/licence/verify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+  try {
+    const issued = issueLicence([], "Acme");
+    store.set({ licences: issued.licences });
+
+    assert.deepEqual(await verify({ key: issued.key, build: "APPROVED1" }), { valid: true, customer: "Acme" });
+    assert.equal((await verify({ key: issued.key, build: "EDITED-COPY" })).valid, false);
+    assert.equal((await verify({ key: issued.key })).valid, false, "no build sent is refused when builds are approved");
+  } finally {
+    server.close();
+  }
+});
+
 test("revoking an unknown or already-revoked licence is refused", async () => {
   const store = await newStore();
   const srv = await serve(store);

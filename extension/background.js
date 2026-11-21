@@ -397,6 +397,24 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang, t
 
 // ---------- licence ----------
 
+// Fingerprint of this extension's own scripts, the same bytes the build script hashes.
+// Returns "" if the files cannot be read (for example in a test environment).
+let fingerprintMemo = null;
+async function buildFingerprint() {
+  if (fingerprintMemo !== null) return fingerprintMemo;
+  try {
+    const files = ["background.js", "content.js", "popup/popup.js"];
+    const texts = [];
+    for (const f of files) texts.push(await (await fetch(chrome.runtime.getURL(f))).text());
+    const bytes = new TextEncoder().encode(texts.join("\n--fillhero--\n"));
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    fingerprintMemo = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    fingerprintMemo = "";
+  }
+  return fingerprintMemo;
+}
+
 // Returns { allowed, reason }. Asks the server at most once a day; otherwise uses the saved result.
 // A key that cannot be checked keeps working for 72 hours after its last successful check.
 async function checkLicence() {
@@ -409,8 +427,9 @@ async function checkLicence() {
 
   let serverAnswer = null;
   try {
+    const build = await buildFingerprint();
     const res = await withTimeout(
-      fetch(CFG.licenceUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }) }),
+      fetch(CFG.licenceUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, build }) }),
       10000,
       "licence check"
     );
@@ -425,6 +444,11 @@ async function checkLicence() {
   await chrome.storage.local.set({ licenceCache: decision.cache });
   return { allowed: decision.allowed, reason: decision.reason };
 }
+
+// Checks the licence when the extension starts, so a problem shows up before the first run.
+// Failures are ignored here; the check at run time still refuses anything not valid.
+chrome.runtime.onStartup?.addListener(() => checkLicence().catch(() => {}));
+checkLicence().catch(() => {});
 
 // What the popup shows. Reads only what is saved, so it never calls the server.
 async function licenceStatus() {

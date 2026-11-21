@@ -33,7 +33,9 @@ const campaigns = new CampaignRunner(store, {
   unsubscribeSecret: token,
   ...campaignLimitsFromEnv(),
 });
-const app = createApp({ store, engine, token, origins, campaigns });
+// APPROVED_BUILDS: comma-separated fingerprints from `npm run build:extension`. Empty = accept any build.
+const approvedBuilds = (process.env.APPROVED_BUILDS || "").split(",").map((s) => s.trim()).filter(Boolean);
+const app = createApp({ store, engine, token, origins, campaigns, approvedBuilds });
 
 const server = app.listen(port, () => {
   console.log(`Fill Hero API listening on port ${port}; data in ${dataDir}; origins: ${origins.join(", ") || "none"}`);

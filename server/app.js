@@ -135,7 +135,7 @@ function cleanSmtp(input) {
   return { host, port, user, from, password, clearPassword: input.clearPassword === true };
 }
 
-export function createApp({ store, engine, token, origins = [], campaigns = null }) {
+export function createApp({ store, engine, token, origins = [], campaigns = null, approvedBuilds = [] }) {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1); // Render sits in front of the server, so req.ip is the caller's address
@@ -164,8 +164,16 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
     res.set("cache-control", "no-store");
     if (licenceLimiter.blocked(ip)) return res.status(429).json({ valid: false, reason: "too-many-tries" });
     const key = typeof req.body?.key === "string" ? req.body.key.trim() : "";
+    const build = typeof req.body?.build === "string" ? req.body.build : "";
     const licence = key.length >= 10 && key.length <= 40 ? findLicence(store.get().licences, key) : null;
-    if (licence && licence.status === "active") return res.json({ valid: true, customer: licence.customer });
+    if (licence && licence.status === "active") {
+      // Only builds you approved (APPROVED_BUILDS) get a valid answer. An edited copy is refused.
+      if (approvedBuilds.length && !approvedBuilds.includes(build)) {
+        licenceLimiter.failed(ip);
+        return res.json({ valid: false, reason: "build-not-approved" });
+      }
+      return res.json({ valid: true, customer: licence.customer });
+    }
     licenceLimiter.failed(ip);
     return res.json({ valid: false, reason: "not-valid" });
   });

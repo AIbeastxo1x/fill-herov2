@@ -120,6 +120,19 @@ hidden. The readable source in `extension/` is never shipped, and `dist/` is not
 
 Zip the `dist/extension` folder for a customer, or load it unpacked to test.
 
+The build prints a **fingerprint**: a SHA-256 of the shipped scripts. The extension sends it with
+its key, and the server answers only for fingerprints listed in `APPROVED_BUILDS`. So:
+
+1. Run `npm run build:extension` and copy the fingerprint it prints.
+2. On Render, set `APPROVED_BUILDS` to the fingerprint(s) of the builds you ship (comma-separated).
+3. Redeploy Render. A copy whose scripts were edited is then refused by the server.
+
+The fingerprint changes whenever the source changes, so approve each new build before you ship it.
+If `APPROVED_BUILDS` is empty, the server accepts any build.
+
+What this does not cover: a copy with the licence check removed never contacts the server, so
+the server cannot see it. Only a copy that keeps the check and changes the scripts is refused.
+
 Obfuscation makes the code hard to read and copy, but it cannot stop a determined person who
 can run the extension. Use it together with the licence check, and keep anything that must stay
 private on the server.
