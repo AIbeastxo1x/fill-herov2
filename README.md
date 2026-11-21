@@ -106,6 +106,24 @@ never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed f
   messages go out in English, and the log says so.
 - **Dates** use the server's time zone. Set `TZ` on the host if you want your local day.
 
+## Protected extension build
+
+Build the copy you give to customers with:
+
+```powershell
+npm run build:extension
+```
+
+This writes `dist/extension`. The background script is bundled into one file and obfuscated,
+and so are the popup and page scripts. The names of the licence check and the run logic are
+hidden. The readable source in `extension/` is never shipped, and `dist/` is not in git.
+
+Zip the `dist/extension` folder for a customer, or load it unpacked to test.
+
+Obfuscation makes the code hard to read and copy, but it cannot stop a determined person who
+can run the extension. Use it together with the licence check, and keep anything that must stay
+private on the server.
+
 ## Extension licences
 
 The Chrome extension needs a licence key before it runs. You issue keys in the **Extension

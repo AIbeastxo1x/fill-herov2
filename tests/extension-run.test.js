@@ -112,7 +112,9 @@ globalThis.chrome = {
 };
 
 // The service worker registers its message handler when it loads.
-await import("../extension/background.js");
+// FH_EXTENSION_BUILD=dist runs the same scenarios against the protected build.
+const BUILD = process.env.FH_EXTENSION_BUILD === "dist" ? "../dist/extension/background.js" : "../extension/background.js";
+await import(BUILD);
 
 function ask(msg) {
   return new Promise((resolve) => listeners.message(msg, {}, resolve));

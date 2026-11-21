@@ -6,11 +6,16 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test tests/",
-    "sync:extension": "node scripts/sync-extension.js"
+    "sync:extension": "node scripts/sync-extension.js",
+    "build:extension": "node scripts/build-extension.js"
   },
   "dependencies": {
     "express": "^4.21.2",
     "nodemailer": "^6.10.1",
     "playwright": "^1.65.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "javascript-obfuscator": "^5.10.1"
   }
 }
