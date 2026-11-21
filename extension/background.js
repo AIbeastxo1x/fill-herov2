@@ -338,9 +338,10 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
   if (fallback) return { status: "queued", reason: fallback.reason, pageUrl: fallback.pageUrl };
 
   // No usable form at all: keep the email addresses for the email export.
-  if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url };
+  // No usable form on the site: its email addresses are kept for the export.
+  if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url, noForm: true };
   const tried = attempts.length ? attempts.join(" | ") : "no contact links found";
-  return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url };
+  return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url, noForm: true };
 }
 
 async function collectLinksSafe(tabId, url) {
@@ -532,11 +533,13 @@ async function runLoop(domains) {
       currentTabId = tab.id;
       const token = { aborted: false, emails: new Map() }; // email -> page it was found on
       let keepOpen = dryRun;
+      let siteHasNoForm = false; // set only when the site is known to have no usable form
       try {
         const r = await withTimeout(processDomain(tab.id, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
           token.aborted = true; // a late submit from the abandoned attempt is refused
           throw err;
         });
+        siteHasNoForm = r.noForm === true;
         if (r.status === "queued") {
           const reason = r.reason;
           if (reason.startsWith("captcha")) await storeCaptchaDomain(entry.host, r.pageUrl);
@@ -555,9 +558,9 @@ async function runLoop(domains) {
             : String(err?.message ?? err);
         await logEntry({ host: entry.host, status: stopRequested ? "skipped" : "failed", reason, pageUrl: entry.url });
       } finally {
-        // Save every address found on this domain, whatever happened to its form.
+        // Addresses are kept only for sites with no usable form.
         const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
-        if (found.length) await storeEmails(entry.host, found).catch(() => {});
+        if (siteHasNoForm && found.length) await storeEmails(entry.host, found).catch(() => {});
         currentTabId = null;
         if (!keepOpen) await closeTab(tab.id);
         await countVisitAndMaybeClear().catch(() => {});

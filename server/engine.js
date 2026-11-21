@@ -272,9 +272,10 @@ export class Engine {
 
     if (fallback) return { status: "queued", reason: fallback.reason, pageUrl: fallback.pageUrl };
 
-    if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url };
+    // No usable form on the site: its email addresses are kept for the export.
+    if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url, noForm: true };
     const tried = attempts.length ? attempts.join(" | ") : "no contact links found";
-    return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url };
+    return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url, noForm: true };
   }
 
   async submitPick({ page, pick, pageUrl, profile, dryRun, host, lang, token }) {
@@ -352,12 +353,14 @@ export class Engine {
         const page = await context.newPage();
         this.currentPage = page;
         const token = { aborted: false, emails: new Map() }; // email -> page it was found on
+        let siteHasNoForm = false; // set only when the site is known to have no usable form
         try {
           const r = await withTimeout(this.processDomain(page, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
             token.aborted = true; // a late submit from the abandoned attempt is refused
             throw err;
           });
           this.live.step(entry.host, `Result: ${r.status}${r.reason ? ` (${String(r.reason).slice(0, 120)})` : ""}`);
+          siteHasNoForm = r.noForm === true;
           if (r.status === "queued") {
             const reason = r.reason;
             if (reason.startsWith("captcha")) this.storeCaptchaDomain(entry.host, r.pageUrl);
@@ -374,9 +377,9 @@ export class Engine {
           this.log({ host: entry.host, status: "failed", reason, pageUrl: entry.url });
           this.live.step(entry.host, `Gave up: ${reason}`);
         } finally {
-          // Save every address found on this domain, whatever happened to its form.
+          // Addresses are kept only for sites with no usable form.
           const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
-          if (found.length) this.storeEmails(entry.host, found);
+          if (siteHasNoForm && found.length) this.storeEmails(entry.host, found);
           this.currentPage = null;
           await page.close().catch(() => {});
         }
