@@ -273,6 +273,31 @@ test("Stop also closes the tabs and shows a 'run stopped' notification", async (
   assert.equal(notified[0].title, "Fill Hero: run stopped");
 });
 
+function queueItem(host) {
+  return { host, url: `https://${host}/`, pageUrl: `https://${host}/contact`, reason: "test", at: Date.now() };
+}
+
+test("the Close review tabs button closes the tabs opened by Approve", async () => {
+  resetWorld();
+  storage.queue = [queueItem("xi-review.com")];
+  await ask({ type: "approveQueued", host: "xi-review.com" });
+  assert.equal(tabs.size, 1, "the review tab is open");
+  await ask({ type: "closeReviewTabs" });
+  assert.equal(tabs.size, 0, `still open: ${[...tabs.keys()].join(", ")}`);
+});
+
+test("a review tab closes a few seconds after its form is submitted and the page moves on", async () => {
+  resetWorld();
+  storage.queue = [queueItem("pi-review.com")];
+  await ask({ type: "approveQueued", host: "pi-review.com" });
+  const [tabId] = [...tabs.keys()];
+  assert.ok(tabId !== undefined, "the review tab is open");
+  // The page moves on to a thank-you address after the submit.
+  listeners.updated.forEach((fn) => fn(tabId, { url: "https://pi-review.com/thanks" }));
+  await new Promise((r) => setTimeout(r, 3500));
+  assert.equal(tabs.has(tabId), false, "the review tab closed after the submit");
+});
+
 test("the history watchdog removes the pages it visited after every batch of visits", async () => {
   resetWorld();
   await startRun("delta-site.com\nepsilon-site.com", { dryRun: true });

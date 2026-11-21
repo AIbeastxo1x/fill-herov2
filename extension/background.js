@@ -85,10 +85,32 @@ async function queueEntry(entry) {
 // Tabs this extension opened, oldest first. A tab leaves the list when it is closed
 // by us or by the user.
 const managedTabs = [];
+
+// Review tabs opened by Approve: tab id -> the address the review opened, or null until it has loaded.
+const reviewTabs = new Map();
+
 chrome.tabs.onRemoved.addListener((id) => {
   const i = managedTabs.indexOf(id);
   if (i >= 0) managedTabs.splice(i, 1);
+  reviewTabs.delete(id);
 });
+
+// A review tab is finished once its form is submitted and the page moves on. Close it a moment later.
+chrome.tabs.onUpdated.addListener((id, info) => {
+  const reviewedUrl = reviewTabs.get(id);
+  if (!reviewedUrl || !info.url || info.url === reviewedUrl) return; // still loading, or not a loaded review tab
+  setTimeout(() => closeReviewTab(id), 3000);
+});
+
+async function closeReviewTab(id) {
+  reviewTabs.delete(id);
+  await closeTab(id);
+}
+
+// Closes every review tab, for when the reviews are done.
+async function closeReviewTabs() {
+  for (const id of [...reviewTabs.keys()]) await closeReviewTab(id);
+}
 
 // Opens a tab. If MAX_TABS are already open, closes the oldest one first.
 // Safe because runs are sequential, and approveQueued is refused during a run.
@@ -610,7 +632,9 @@ async function approveQueued(host) {
   if (!item) return;
 
   const tab = await openTab("about:blank", true);
+  reviewTabs.set(tab.id, null); // not loaded yet, so a redirect while loading does not count as a submit
   await go(tab.id, item.pageUrl); // same race-free navigation as the run loop
+  reviewTabs.set(tab.id, item.pageUrl);
   const scan = await scanWithRetry(tab.id);
   const pick = pickForm(scan);
   if (!pick) {
@@ -672,6 +696,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         await approveQueued(msg.host);
         return sendResponse({ ok: true });
       }
+      case "closeReviewTabs":
+        await closeReviewTabs();
+        return sendResponse({ ok: true });
       case "skipQueued":
         await skipQueued(msg.host);
         return sendResponse({ ok: true });

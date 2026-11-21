@@ -87,6 +87,8 @@ $("start").addEventListener("click", async () => {
   refresh();
 });
 
+$("close-review").addEventListener("click", () => send({ type: "closeReviewTabs" }));
+
 $("stop").addEventListener("click", async () => {
   await send({ type: "stop" });
   refresh();
