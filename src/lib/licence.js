@@ -21,7 +21,8 @@ export function decide(cache, key, now, serverAnswer) {
       const next = { key, checkedAt: now, valid: true, customer: serverAnswer.customer || "" };
       return { allowed: true, reason: "valid", cache: next };
     }
-    return { allowed: false, reason: "licence-not-valid", cache: { key, checkedAt: now, valid: false, customer: "" } };
+    // The server's reason (for example "build-not-approved") is passed on so the popup can explain it.
+    return { allowed: false, reason: serverAnswer.reason || "licence-not-valid", cache: { key, checkedAt: now, valid: false, customer: "" } };
   }
 
   // No answer from the server: allowed only inside the grace period of a key that was valid.

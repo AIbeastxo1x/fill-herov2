@@ -129,6 +129,7 @@ const LICENCE_REASONS = {
   "licence-not-valid": "This key is not valid or has been revoked.",
   "cannot-check-licence": "Could not check the key, and its last check is too old. Connect to the internet and try again.",
   "too-many-tries": "Too many attempts. Wait ten minutes and try again.",
+  "build-not-approved": "The server does not approve this build. Add its fingerprint to APPROVED_BUILDS on the server.",
 };
 
 function describeLicence(status) {
@@ -147,17 +148,15 @@ $("licence-save").addEventListener("click", async () => {
   const key = $("licence-key").value.trim();
   $("licence-status").textContent = "Checking…";
   const res = await send({ type: "setLicence", key });
+  // The result of this check is shown as it is. The regular refresh does not replace it.
   if (!res) {
     $("licence-status").textContent = "The extension did not respond. Reload it and try again.";
-    return;
-  }
-  if (res.allowed) {
+  } else if (res.allowed) {
     $("licence-key").value = "";
     $("licence-status").textContent = "Licence accepted.";
   } else {
-    $("licence-status").textContent = LICENCE_REASONS[res.reason] ?? "Licence not accepted.";
+    $("licence-status").textContent = LICENCE_REASONS[res.reason] ?? `Licence not accepted (${res.reason}).`;
   }
-  refreshLicence();
 });
 
 refresh();
