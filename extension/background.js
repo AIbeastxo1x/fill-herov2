@@ -371,7 +371,8 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang, t
     // A navigation during submit usually means it did.
     result = isTimeout(err) ? { outcome: "unknown" } : { outcome: "confirmed" };
   }
-  const after = (await chrome.tabs.get(tabId)).url;
+  // The address is read from the browser, not the page, so it works even when the page is stuck.
+  const after = await withTimeout(chrome.tabs.get(tabId), STEP_TIMEOUT_MS, "read address").then((t) => t.url).catch(() => before);
   const outcome = result?.outcome === "confirmed" || after !== before ? "sent" : "sent?";
 
   const state = await getAll();

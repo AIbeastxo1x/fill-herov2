@@ -171,6 +171,9 @@
       const form = getForm(formIndex);
       if (!form) return resolve({ ok: false, outcome: "unverified", reason: "form-not-found" });
 
+      // A thank-you line already on the page (a footer, say) must not count as this submit's confirmation.
+      const thanksBefore = thankYouShown();
+
       if (typeof form.requestSubmit === "function") form.requestSubmit();
       else form.submit();
 
@@ -178,7 +181,8 @@
       const timer = setInterval(() => {
         const navigated = location.href !== startUrl;
         const formGone = !getForm(formIndex);
-        if (navigated || thankYouShown() || formGone) {
+        const thanksNow = !thanksBefore && thankYouShown();
+        if (navigated || thanksNow || formGone) {
           clearInterval(timer);
           return resolve({ ok: true, outcome: "confirmed" });
         }
