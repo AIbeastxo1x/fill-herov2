@@ -9,6 +9,7 @@ import { buildEmailsFile, buildCaptchaFile } from "../src/lib/files.js";
 import { pendingRecipients } from "./campaign.js";
 import { encryptSecret } from "./mailer.js";
 import { readUnsubscribeToken } from "./unsubscribe.js";
+import { issueLicence, revokeLicence, findLicence, makeAttemptLimiter } from "./licence.js";
 
 const UNSUBSCRIBE_PAGE = (title, text) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><h1>${title}</h1><p>${text}</p></body></html>`;
@@ -137,6 +138,7 @@ function cleanSmtp(input) {
 export function createApp({ store, engine, token, origins = [], campaigns = null }) {
   const app = express();
   app.disable("x-powered-by");
+  app.set("trust proxy", 1); // Render sits in front of the server, so req.ip is the caller's address
   app.use(express.json({ limit: "300kb" }));
 
   // CORS: only the listed front-end origins may call the API from a browser.
@@ -153,6 +155,20 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
   });
 
   app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+  // Licence check for the Chrome extension. Public on purpose: it returns only valid or not, and the
+  // extension sends a key, never the token. Failed tries are limited per address to stop guessing.
+  const licenceLimiter = makeAttemptLimiter();
+  app.post("/licence/verify", (req, res) => {
+    const ip = req.ip || "unknown";
+    res.set("cache-control", "no-store");
+    if (licenceLimiter.blocked(ip)) return res.status(429).json({ valid: false, reason: "too-many-tries" });
+    const key = typeof req.body?.key === "string" ? req.body.key.trim() : "";
+    const licence = key.length >= 10 && key.length <= 40 ? findLicence(store.get().licences, key) : null;
+    if (licence && licence.status === "active") return res.json({ valid: true, customer: licence.customer });
+    licenceLimiter.failed(ip);
+    return res.json({ valid: false, reason: "not-valid" });
+  });
 
   // Public, outside /api, so it needs no sign-in. Works from the link in each email, and from the
   // List-Unsubscribe-Post button that mail clients show. Only a valid signed link can unsubscribe.
@@ -195,6 +211,35 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
   });
 
   // Live view of the current run: the step feed and the latest screenshot. Nothing is kept on disk.
+  // ---------- extension licences (owner only, behind the token) ----------
+
+  app.get("/api/licences", (req, res) => {
+    res.json({
+      licences: store.get().licences.map(({ keyHash, ...rest }) => rest), // the key itself is never returned
+    });
+  });
+
+  app.post("/api/licences", (req, res, next) => {
+    try {
+      const customer = typeof req.body?.customer === "string" ? req.body.customer.trim() : "";
+      if (!customer || customer.length > 200) throw httpError(400, "say who the licence is for (up to 200 characters)");
+      const issued = issueLicence(store.get().licences, customer);
+      store.set({ licences: issued.licences });
+      // The key is returned once. It cannot be looked up again.
+      res.status(201).json({ key: issued.key, id: issued.licence.id, customer });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/licences/:id/revoke", (req, res) => {
+    const before = store.get().licences;
+    const after = revokeLicence(before, req.params.id);
+    if (JSON.stringify(after) === JSON.stringify(before)) return res.status(404).json({ error: "no active licence with that id" });
+    store.set({ licences: after });
+    res.json({ ok: true });
+  });
+
   app.get("/api/live", (req, res) => {
     res.json(engine.live ? engine.live.snapshot() : { steps: [], image: null, imageAt: 0, stepCount: 0 });
   });

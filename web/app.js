@@ -48,7 +48,7 @@ function setStatus(text, ok) {
 }
 
 function showCards(visible) {
-  for (const id of ["run-card", "live-card", "report-card", "profile-card", "files-card", "smtp-card", "contacts-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
+  for (const id of ["run-card", "live-card", "report-card", "profile-card", "files-card", "smtp-card", "licences-card", "contacts-card", "campaign-card", "reset-card"]) $(id).hidden = !visible;
 }
 
 function fillProfile(profile) {
@@ -93,10 +93,75 @@ async function refresh() {
     return;
   }
   await refreshLive();
+  await refreshLicences();
   await refreshCampaign();
   await refreshSmtp();
   await refreshContacts();
 }
+
+// ---------- extension licences ----------
+
+async function refreshLicences() {
+  try {
+    const d = await (await api("/licences")).json();
+    const body = $("l-list");
+    body.replaceChildren(
+      ...(d.licences.length
+        ? d.licences.map((l) => {
+            const tr = document.createElement("tr");
+            const who = document.createElement("td");
+            who.textContent = l.customer;
+            const status = document.createElement("td");
+            status.className = "num";
+            status.textContent = l.status === "active" ? `issued ${l.issuedAt ? new Date(l.issuedAt).toLocaleDateString() : ""}` : "revoked";
+            const action = document.createElement("td");
+            action.className = "num";
+            if (l.status === "active") {
+              const btn = document.createElement("button");
+              btn.className = "danger";
+              btn.textContent = "Revoke";
+              btn.addEventListener("click", () => revokeLicence(l.id, l.customer));
+              action.append(btn);
+            }
+            tr.append(who, status, action);
+            return tr;
+          })
+        : [Object.assign(document.createElement("tr"), { innerHTML: "<td>No licences issued yet.</td>" })])
+    );
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("l-msg").textContent = `Could not load licences: ${err.message}`;
+  }
+}
+
+async function revokeLicence(id, customer) {
+  if (!confirm(`Revoke the licence for ${customer}? They will be stopped at their next check.`)) return;
+  try {
+    await api(`/licences/${id}/revoke`, { method: "POST" });
+    $("l-msg").textContent = `Revoked the licence for ${customer}.`;
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("l-msg").textContent = `Not revoked: ${err.message}`;
+  }
+  refreshLicences();
+}
+
+$("issue-licence").addEventListener("click", async () => {
+  const customer = $("l-customer").value.trim();
+  if (!customer) {
+    $("l-msg").textContent = "Enter who the licence is for.";
+    return;
+  }
+  try {
+    const r = await api("/licences", { method: "POST", body: { customer } });
+    const d = await r.json();
+    $("l-key").textContent = d.key;
+    $("l-new").hidden = false;
+    $("l-customer").value = "";
+    $("l-msg").textContent = `Issued to ${d.customer}.`;
+  } catch (err) {
+    if (err.message !== SIGNED_OUT) $("l-msg").textContent = `Not issued: ${err.message}`;
+  }
+  refreshLicences();
+});
 
 // ---------- live view ----------
 

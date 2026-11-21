@@ -80,7 +80,7 @@ $("start").addEventListener("click", async () => {
   if (!domains.trim()) return;
   const res = await send({ type: "start", domains, dryRun: $("dryrun").checked, profile: readProfile() });
   if (!res) alert("The extension did not respond. Reload it in chrome://extensions and try again.");
-  else if (!res.ok) alert("Already running.");
+  else if (res.reason && !res.ok) alert(LICENCE_REASONS[res.reason] ?? (res.reason === "already-running" ? "Already running." : `Not started: ${res.reason}`));
   refresh();
 });
 
@@ -119,5 +119,45 @@ for (const id of Object.keys(PROFILE_FIELDS)) {
   });
 }
 
+// ---------- licence ----------
+
+const LICENCE_REASONS = {
+  "no-licence": "Enter your licence key to use this tool.",
+  "licence-not-valid": "This key is not valid or has been revoked.",
+  "cannot-check-licence": "Could not check the key, and its last check is too old. Connect to the internet and try again.",
+  "too-many-tries": "Too many attempts. Wait ten minutes and try again.",
+};
+
+function describeLicence(status) {
+  if (!status.hasKey) return LICENCE_REASONS["no-licence"];
+  if (status.valid) return `Licensed to ${status.customer || "you"}.`;
+  return "Key saved, but not checked yet. Press Activate.";
+}
+
+async function refreshLicence() {
+  const status = await send({ type: "licenceStatus" });
+  if (!status) return;
+  $("licence-status").textContent = describeLicence(status);
+}
+
+$("licence-save").addEventListener("click", async () => {
+  const key = $("licence-key").value.trim();
+  $("licence-status").textContent = "Checking…";
+  const res = await send({ type: "setLicence", key });
+  if (!res) {
+    $("licence-status").textContent = "The extension did not respond. Reload it and try again.";
+    return;
+  }
+  if (res.allowed) {
+    $("licence-key").value = "";
+    $("licence-status").textContent = "Licence accepted.";
+  } else {
+    $("licence-status").textContent = LICENCE_REASONS[res.reason] ?? "Licence not accepted.";
+  }
+  refreshLicence();
+});
+
 refresh();
+refreshLicence();
 setInterval(refresh, 2000);
+setInterval(refreshLicence, 60000);

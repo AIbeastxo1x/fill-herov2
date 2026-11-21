@@ -4,7 +4,7 @@
 import { isSignedIn } from "../lib/session.js";
 
 // Only these routes are forwarded. Anything else is refused.
-const ALLOWED = /^(state|live|profile|start|stop|clear|campaign|campaign\/(start|stop|suppress)|smtp|smtp\/test|contacts|contacts\/(import|clear)|files\/(emails\.txt|captcha_domains\.txt))$/;
+const ALLOWED = /^(state|live|profile|start|stop|clear|campaign|campaign\/(start|stop|suppress)|smtp|smtp\/test|contacts|contacts\/(import|clear)|licences|licences\/[0-9a-f]+\/revoke|files\/(emails\.txt|captcha_domains\.txt))$/;
 const METHODS = new Set(["GET", "PUT", "POST"]);
 
 const json = (statusCode, body) => ({

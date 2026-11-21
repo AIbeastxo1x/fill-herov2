@@ -5,7 +5,20 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 // Short limits, so the tests run in seconds. Read once when the service worker loads.
-globalThis.__FILLHERO_TEST__ = { stepMs: 300, submitMs: 300, translateMs: 300, domainMs: 1000, historyEvery: 2 };
+globalThis.__FILLHERO_TEST__ = { stepMs: 300, submitMs: 300, translateMs: 300, domainMs: 1000, historyEvery: 2, licenceUrl: "https://licence.test/verify" };
+
+const TEST_KEY = "FH-TEST1-TEST2-TEST3-TEST4";
+const OTHER_KEY = "FH-OTHE1-OTHE2-OTHE3-OTHE4";
+// What the fake licence server says. mode: "valid" | "invalid" | "down".
+const licenceServer = { mode: "valid", calls: 0 };
+globalThis.fetch = async (url, opts) => {
+  if (url !== "https://licence.test/verify") throw new Error(`unexpected request to ${url}`);
+  licenceServer.calls += 1;
+  if (licenceServer.mode === "down") throw new Error("network down");
+  const { key } = JSON.parse(opts.body);
+  const valid = licenceServer.mode === "valid" && key === TEST_KEY;
+  return { ok: true, status: 200, json: async () => ({ valid, customer: valid ? "Test Customer" : undefined }) };
+};
 
 const storage = {};
 const tabs = new Map(); // id -> { url, hang }
@@ -115,6 +128,7 @@ async function waitForIdle(limitMs = 8000) {
   }
 }
 
+// Every test starts with a valid licence that was checked moments ago, so runs do not depend on the server.
 function resetWorld() {
   for (const k of Object.keys(storage)) delete storage[k];
   tabs.clear();
@@ -123,6 +137,10 @@ function resetWorld() {
   historyDeleted.length = 0;
   hangNewTabs = false;
   hangTabsGet = false;
+  licenceServer.mode = "valid";
+  licenceServer.calls = 0;
+  storage.licenceKey = TEST_KEY;
+  storage.licenceCache = { key: TEST_KEY, checkedAt: Date.now(), valid: true, customer: "Test Customer" };
 }
 
 async function startRun(domains, { dryRun = true } = {}) {
@@ -166,6 +184,60 @@ test("Stop closes the open tab and the run ends at once", async () => {
   await waitForIdle(3000);
   assert.ok(Date.now() - stopAt < 3000, `stop took ${Date.now() - stopAt} ms`);
   assert.ok(removed.length >= 1, "the open tab was closed by Stop");
+});
+
+test("without a licence, a run does not start and no page is opened", async () => {
+  resetWorld();
+  delete storage.licenceKey;
+  delete storage.licenceCache;
+  const res = await ask({ type: "start", domains: "zeta-site.com", dryRun: true, profile: {} });
+  assert.deepEqual(res, { ok: false, reason: "no-licence" });
+  assert.equal(tabs.size, 0);
+  assert.equal(licenceServer.calls, 0);
+});
+
+test("a key the server rejects does not start a run", async () => {
+  resetWorld();
+  storage.licenceKey = OTHER_KEY;
+  storage.licenceCache = null;
+  licenceServer.mode = "valid"; // the server only accepts TEST_KEY, so OTHER_KEY is refused
+  const res = await ask({ type: "start", domains: "eta-site.com", dryRun: true, profile: {} });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "licence-not-valid");
+  assert.equal(tabs.size, 0);
+});
+
+test("a valid key is checked once, then trusted for a day without asking again", async () => {
+  resetWorld();
+  storage.licenceCache = null;
+  const first = await ask({ type: "setLicence", key: TEST_KEY });
+  assert.equal(first.allowed, true);
+  const callsAfterFirst = licenceServer.calls;
+  const status = await ask({ type: "licenceStatus" });
+  assert.equal(status.valid, true);
+  assert.equal(status.customer, "Test Customer");
+  const again = await ask({ type: "start", domains: "theta-site.com", dryRun: true, profile: {} });
+  assert.equal(again.ok, true);
+  assert.equal(licenceServer.calls, callsAfterFirst, "no second server call inside the day");
+  await waitForIdle();
+});
+
+test("if the server cannot be reached, a key checked within 72 hours still works", async () => {
+  resetWorld();
+  storage.licenceCache = { key: TEST_KEY, checkedAt: Date.now() - 2 * 24 * 60 * 60 * 1000, valid: true, customer: "Test Customer" };
+  licenceServer.mode = "down";
+  const res = await ask({ type: "start", domains: "iota-site.com", dryRun: true, profile: {} });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  await waitForIdle();
+});
+
+test("if the server cannot be reached and the last check is too old, the run is refused", async () => {
+  resetWorld();
+  storage.licenceCache = { key: TEST_KEY, checkedAt: Date.now() - 4 * 24 * 60 * 60 * 1000, valid: true, customer: "Test Customer" };
+  licenceServer.mode = "down";
+  const res = await ask({ type: "start", domains: "kappa-site.com", dryRun: true, profile: {} });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "cannot-check-licence");
 });
 
 test("the history watchdog removes the pages it visited after every batch of visits", async () => {

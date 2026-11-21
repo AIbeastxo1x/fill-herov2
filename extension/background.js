@@ -8,6 +8,7 @@ import { buildFillPlan, summarizePlan } from "./lib/fillPlan.js";
 import { siteLanguage, needsTranslation } from "./lib/language.js";
 import { extractEmails, emailsToCsv } from "./lib/emails.js";
 import { buildEmailsFile, buildCaptchaFile, dataUrl, EMAIL_FILE, CAPTCHA_FILE } from "./lib/files.js";
+import { needsCheck, decide } from "./lib/licence.js";
 
 const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 const MAX_CONTACT_PAGES = 3;
@@ -19,6 +20,7 @@ const CFG = {
   submitMs: 60000, // submitting can be slow on some sites, so it gets longer than a scan or fill
   domainMs: 180000, // a whole domain gives up after this, so one bad site cannot stall a run
   historyEvery: 500, // domain visits between history clean-ups
+  licenceUrl: "https://fill-herov2.onrender.com/licence/verify", // the server that checks licence keys
   ...(globalThis.__FILLHERO_TEST__ ?? {}),
 };
 const STEP_TIMEOUT_MS = CFG.stepMs;
@@ -393,6 +395,46 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang, t
   return { status: outcome, reason: summary, pageUrl };
 }
 
+// ---------- licence ----------
+
+// Returns { allowed, reason }. Asks the server at most once a day; otherwise uses the saved result.
+// A key that cannot be checked keeps working for 72 hours after its last successful check.
+async function checkLicence() {
+  const s = await chrome.storage.local.get(["licenceKey", "licenceCache"]);
+  const key = s.licenceKey || "";
+  const cache = s.licenceCache || null;
+  const now = Date.now();
+  if (!key) return { allowed: false, reason: "no-licence" };
+  if (cache && cache.key === key && !needsCheck(cache, now)) return { allowed: true, reason: "cached" };
+
+  let serverAnswer = null;
+  try {
+    const res = await withTimeout(
+      fetch(CFG.licenceUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }) }),
+      10000,
+      "licence check"
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (typeof data?.valid === "boolean") serverAnswer = data;
+    }
+  } catch {
+    serverAnswer = null; // no answer: the grace period decides
+  }
+  const decision = decide(cache, key, now, serverAnswer);
+  await chrome.storage.local.set({ licenceCache: decision.cache });
+  return { allowed: decision.allowed, reason: decision.reason };
+}
+
+// What the popup shows. Reads only what is saved, so it never calls the server.
+async function licenceStatus() {
+  const s = await chrome.storage.local.get(["licenceKey", "licenceCache"]);
+  const key = s.licenceKey || "";
+  const cache = s.licenceCache || null;
+  const valid = Boolean(key && cache && cache.key === key && cache.valid);
+  return { hasKey: Boolean(key), valid, customer: valid ? cache.customer || "" : "", checkedAt: cache?.checkedAt || 0 };
+}
+
 // ---------- history watchdog ----------
 
 // Remembers the pages this extension opened, so they can be removed from history later.
@@ -534,21 +576,36 @@ async function exportEmailsCsv() {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     switch (msg.type) {
-      case "start":
+      case "start": {
         if (running) return sendResponse({ ok: false, reason: "already-running" });
+        const licence = await checkLicence();
+        if (!licence.allowed) return sendResponse({ ok: false, reason: licence.reason });
         if (msg.profile) await save({ profile: msg.profile });
         await save({ dryRun: !!msg.dryRun });
         runLoop(parseDomainList(msg.domains)).catch((err) => console.error("run failed:", err?.message ?? err));
         return sendResponse({ ok: true });
+      }
+      case "licenceStatus":
+        return sendResponse(await licenceStatus());
+      case "setLicence": {
+        // Saves a new key (or removes the key when empty), then checks it once now.
+        const key = String(msg.key ?? "").trim().toUpperCase();
+        await chrome.storage.local.set({ licenceKey: key, licenceCache: null });
+        if (!key) return sendResponse({ allowed: false, reason: "no-licence" });
+        return sendResponse(await checkLicence());
+      }
       case "stop":
         stopRequested = true;
         // Closing the open tab cancels a page step that is waiting, so Stop takes effect at once.
         if (currentTabId !== null) await closeTab(currentTabId);
         return sendResponse({ ok: true });
-      case "approveQueued":
+      case "approveQueued": {
         if (running) return sendResponse({ ok: false, reason: "stop-the-run-first" });
+        const licence = await checkLicence();
+        if (!licence.allowed) return sendResponse({ ok: false, reason: licence.reason });
         await approveQueued(msg.host);
         return sendResponse({ ok: true });
+      }
       case "skipQueued":
         await skipQueued(msg.host);
         return sendResponse({ ok: true });

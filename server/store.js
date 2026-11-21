@@ -37,6 +37,7 @@ export const DEFAULTS = {
   suppressed: [], // do-not-email list: addresses that must never be emailed
   emailDaily: { date: "", count: 0 }, // emails sent today, for the daily cap
   smtp: { host: "", port: 587, user: "", from: "", passEnc: "" }, // relay settings from the web page; passEnc is encrypted
+  licences: [], // extension licences: { id, customer, keyHash, status, issuedAt, revokedAt }. No plain keys are stored.
 };
 
 export function createStore(dir) {

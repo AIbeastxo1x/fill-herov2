@@ -116,6 +116,21 @@
     <p class="help" id="smtp-msg"></p>
   </section>
 
+  <section class="card" id="licences-card" hidden>
+    <h2>Extension licences</h2>
+    <p class="help">Issue a key for each person who may use the Chrome extension. A key is shown once, so copy it straight away. Revoking a key stops it working at its next check.</p>
+    <div class="row wrap">
+      <input id="l-customer" type="text" placeholder="Who is this for?" autocomplete="off">
+      <button id="issue-licence" class="primary">Issue key</button>
+    </div>
+    <div id="l-new" hidden>
+      <p class="help">New key. Copy it now, it will not be shown again:</p>
+      <code id="l-key" class="key"></code>
+    </div>
+    <p class="help" id="l-msg"></p>
+    <table class="report"><tbody id="l-list"></tbody></table>
+  </section>
+
   <section class="card" id="contacts-card" hidden>
     <h2>Consented contacts</h2>
     <p class="help">Campaign emails go only to people on this list. Each import must say where and when they agreed to be contacted. Addresses found on websites are not used for campaigns.</p>

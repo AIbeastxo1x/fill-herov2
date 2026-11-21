@@ -106,6 +106,21 @@ never sent to the browser. `ALLOWED_ORIGINS` on the server is no longer needed f
   messages go out in English, and the log says so.
 - **Dates** use the server's time zone. Set `TZ` on the host if you want your local day.
 
+## Extension licences
+
+The Chrome extension needs a licence key before it runs. You issue keys in the **Extension
+licences** card of the web app. Enter the customer's name, press **Issue key**, and copy the key
+at once: it is shown only once, and the server keeps only a hash of it.
+
+- The extension checks its key with the server about once a day. If the server cannot be reached,
+  a key checked within the last 72 hours still works.
+- **Revoke** stops a key at its next check.
+- Wrong keys are limited to 30 tries per address every ten minutes.
+
+Limit to know: the extension runs its own code on the customer's computer, so a determined person
+could remove the check from a copy. The licence stops ordinary use. The web app is the part that
+stays fully under your control, because it is protected by sign-in and the server token.
+
 ## Email campaign
 
 The email campaign sends to the **consented contacts** list only. Import each list in the
