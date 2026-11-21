@@ -169,12 +169,12 @@ async function pageHtml(tabId) {
   return res?.result ?? "";
 }
 
-// Stores new addresses for a host. Returns how many were new.
-async function storeEmails(host, pageUrl, list) {
+// Stores new addresses for a host. items: [{ email, pageUrl }]. Returns how many were new.
+async function storeEmails(host, items) {
   const { emails } = await getAll();
   const known = new Set(emails.filter((e) => e.host === host).map((e) => e.email));
   const at = Date.now();
-  const fresh = list.filter((email) => !known.has(email)).map((email) => ({ host, email, pageUrl, at }));
+  const fresh = items.filter((i) => !known.has(i.email)).map((i) => ({ host, email: i.email, pageUrl: i.pageUrl, at }));
   if (fresh.length) await save({ emails: [...emails, ...fresh] });
   return fresh.length;
 }
@@ -288,11 +288,13 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
   const { links, finalUrl, html } = await collectLinksSafe(tabId, entry.url);
   const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
 
-  // Every email address seen on the pages visited for this domain.
-  const emails = new Set(extractEmails(html));
-  const collect = async () => {
-    for (const e of extractEmails(await pageHtml(tabId).catch(() => ""))) emails.add(e);
+  // Every email address seen on any page of this domain, kept on the token so it is saved whatever the outcome.
+  const emails = token.emails;
+  const remember = (text, pageUrl) => {
+    for (const email of extractEmails(text)) if (!emails.has(email)) emails.set(email, pageUrl);
   };
+  remember(html, finalUrl);
+  const collect = async (pageUrl) => remember(await pageHtml(tabId).catch(() => ""), pageUrl);
 
   let fallback = null;
   let scanError = null;
@@ -300,7 +302,7 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
   for (const pageUrl of candidates) {
     if (stopRequested || token.aborted) return { status: "skipped", reason: stopRequested ? "stopped" : "timed out" };
     await go(tabId, pageUrl);
-    await collect();
+    await collect(pageUrl);
     let scan;
     try {
       scan = await scanWithRetry(tabId);
@@ -336,10 +338,9 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
   if (fallback) return { status: "queued", reason: fallback.reason, pageUrl: fallback.pageUrl };
 
   // No usable form at all: keep the email addresses for the email export.
-  const noForm = { status: "queued", emails: [...emails] };
-  if (scanError) return { ...noForm, reason: `scan-error: ${scanError}`, pageUrl: entry.url };
+  if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url };
   const tried = attempts.length ? attempts.join(" | ") : "no contact links found";
-  return { ...noForm, reason: `no-usable-form (${tried})`, pageUrl: entry.url };
+  return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url };
 }
 
 async function collectLinksSafe(tabId, url) {
@@ -529,7 +530,7 @@ async function runLoop(domains) {
 
       const tab = await openTab("about:blank", dryRun);
       currentTabId = tab.id;
-      const token = { aborted: false };
+      const token = { aborted: false, emails: new Map() }; // email -> page it was found on
       let keepOpen = dryRun;
       try {
         const r = await withTimeout(processDomain(tab.id, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
@@ -537,8 +538,7 @@ async function runLoop(domains) {
           throw err;
         });
         if (r.status === "queued") {
-          let reason = r.reason;
-          if (r.emails) reason += `; emails-stored=${await storeEmails(entry.host, r.pageUrl, r.emails)}`;
+          const reason = r.reason;
           if (reason.startsWith("captcha")) await storeCaptchaDomain(entry.host, r.pageUrl);
           await queueEntry({ host: entry.host, url: entry.url, reason, pageUrl: r.pageUrl });
           keepOpen = true; // for review
@@ -555,6 +555,9 @@ async function runLoop(domains) {
             : String(err?.message ?? err);
         await logEntry({ host: entry.host, status: stopRequested ? "skipped" : "failed", reason, pageUrl: entry.url });
       } finally {
+        // Save every address found on this domain, whatever happened to its form.
+        const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
+        if (found.length) await storeEmails(entry.host, found).catch(() => {});
         currentTabId = null;
         if (!keepOpen) await closeTab(tab.id);
         await countVisitAndMaybeClear().catch(() => {});

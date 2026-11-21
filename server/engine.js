@@ -94,11 +94,12 @@ export class Engine {
     this.log({ host: entry.host, status: "queued", reason: entry.reason, pageUrl: entry.pageUrl });
   }
 
-  storeEmails(host, pageUrl, list) {
+  // items: [{ email, pageUrl }]. Adds the addresses not already stored for this host.
+  storeEmails(host, items) {
     const { emails } = this.store.get();
     const known = new Set(emails.filter((e) => e.host === host).map((e) => e.email));
     const at = Date.now();
-    const fresh = list.filter((email) => !known.has(email)).map((email) => ({ host, email, pageUrl, at }));
+    const fresh = items.filter((i) => !known.has(i.email)).map((i) => ({ host, email: i.email, pageUrl: i.pageUrl, at }));
     if (fresh.length) this.store.set({ emails: [...emails, ...fresh] });
     return fresh.length;
   }
@@ -219,12 +220,15 @@ export class Engine {
     else await this.show(entry.host, `Opened ${finalUrl}`, page);
     const links = await this.collectLinks(page);
     const pageHtml = () => withTimeout(page.content(), STEP_TIMEOUT_MS, "read page").catch(() => "");
-    const emails = new Set(extractEmails(await pageHtml()));
+    // Every address seen on any page of this domain, kept on the token so it is saved whatever the outcome.
+    const emails = token.emails;
+    const remember = (html, pageUrl) => {
+      for (const email of extractEmails(html)) if (!emails.has(email)) emails.set(email, pageUrl);
+    };
+    remember(await pageHtml(), finalUrl);
     const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
 
-    const collect = async () => {
-      for (const e of extractEmails(await pageHtml())) emails.add(e);
-    };
+    const collect = async (pageUrl) => remember(await pageHtml(), pageUrl);
 
     let fallback = null;
     let scanError = null;
@@ -233,7 +237,7 @@ export class Engine {
       if (this.stopRequested || token.aborted) return { status: "skipped", reason: this.stopRequested ? "stopped" : "timed out" };
       const contactError = await this.go(page, pageUrl);
       await this.show(entry.host, contactError ? `Could not open ${pageUrl}: ${contactError}` : `Opened contact page ${pageUrl}`);
-      await collect();
+      await collect(pageUrl);
       let scan;
       try {
         scan = await this.scanWithRetry(page);
@@ -268,10 +272,9 @@ export class Engine {
 
     if (fallback) return { status: "queued", reason: fallback.reason, pageUrl: fallback.pageUrl };
 
-    const noForm = { status: "queued", emails: [...emails] };
-    if (scanError) return { ...noForm, reason: `scan-error: ${scanError}`, pageUrl: entry.url };
+    if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url };
     const tried = attempts.length ? attempts.join(" | ") : "no contact links found";
-    return { ...noForm, reason: `no-usable-form (${tried})`, pageUrl: entry.url };
+    return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url };
   }
 
   async submitPick({ page, pick, pageUrl, profile, dryRun, host, lang, token }) {
@@ -348,7 +351,7 @@ export class Engine {
 
         const page = await context.newPage();
         this.currentPage = page;
-        const token = { aborted: false };
+        const token = { aborted: false, emails: new Map() }; // email -> page it was found on
         try {
           const r = await withTimeout(this.processDomain(page, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
             token.aborted = true; // a late submit from the abandoned attempt is refused
@@ -356,8 +359,7 @@ export class Engine {
           });
           this.live.step(entry.host, `Result: ${r.status}${r.reason ? ` (${String(r.reason).slice(0, 120)})` : ""}`);
           if (r.status === "queued") {
-            let reason = r.reason;
-            if (r.emails) reason += `; emails-stored=${this.storeEmails(entry.host, r.pageUrl, r.emails)}`;
+            const reason = r.reason;
             if (reason.startsWith("captcha")) this.storeCaptchaDomain(entry.host, r.pageUrl);
             this.queue({ host: entry.host, url: entry.url, reason, pageUrl: r.pageUrl });
           } else {
@@ -372,6 +374,9 @@ export class Engine {
           this.log({ host: entry.host, status: "failed", reason, pageUrl: entry.url });
           this.live.step(entry.host, `Gave up: ${reason}`);
         } finally {
+          // Save every address found on this domain, whatever happened to its form.
+          const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
+          if (found.length) this.storeEmails(entry.host, found);
           this.currentPage = null;
           await page.close().catch(() => {});
         }
