@@ -14,7 +14,8 @@ const MAX_CONTACT_PAGES = 3;
 const MAX_TABS = 5;
 const STEP_TIMEOUT_MS = 20000; // any single page step gives up after this
 const TRANSLATE_TIMEOUT_MS = 60000; // the first on-device translation may download a model, so it gets longer
-const DOMAIN_TIMEOUT_MS = 120000; // a whole domain gives up after this, so one bad site cannot stall a run
+const SUBMIT_TIMEOUT_MS = 60000; // submitting can be slow on some sites, so it gets longer than a scan or fill
+const DOMAIN_TIMEOUT_MS = 180000; // a whole domain gives up after this, so one bad site cannot stall a run
 const HISTORY_CLEAR_EVERY = 500; // domain visits between history clean-ups
 const DEFAULT_PROFILE = {
   firstName: "",
@@ -195,9 +196,9 @@ async function clearAll() {
 }
 
 // Inject the content script (idempotent) and send it a message.
-async function toContent(tabId, msg) {
+async function toContent(tabId, msg, timeoutMs = STEP_TIMEOUT_MS) {
   await withTimeout(chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] }), STEP_TIMEOUT_MS, "load page script");
-  return withTimeout(chrome.tabs.sendMessage(tabId, msg), STEP_TIMEOUT_MS, `page step ${msg.type}`);
+  return withTimeout(chrome.tabs.sendMessage(tabId, msg), timeoutMs, `page step ${msg.type}`);
 }
 
 // Some pages render their form a moment after load. Retry the scan if no form is found yet.
@@ -365,7 +366,7 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang, t
   const before = (await chrome.tabs.get(tabId)).url;
   let result;
   try {
-    result = await toContent(tabId, { type: "submit", formIndex: pick.form.index });
+    result = await toContent(tabId, { type: "submit", formIndex: pick.form.index }, SUBMIT_TIMEOUT_MS);
   } catch (err) {
     // A timeout means we cannot tell whether the form went through, so it is never a clean send.
     // A navigation during submit usually means it did.

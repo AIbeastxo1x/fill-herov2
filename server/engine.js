@@ -18,7 +18,8 @@ export const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 export const MAX_CONTACT_PAGES = 3;
 const PAGE_TIMEOUT_MS = 20000;
 const STEP_TIMEOUT_MS = 20000; // any single browser call (scan, fill, submit) gives up after this
-const DOMAIN_TIMEOUT_MS = 120000; // a whole domain gives up after this, so one bad site cannot stall a run
+const SUBMIT_TIMEOUT_MS = 60000; // submitting can be slow on some sites, so it gets longer than a scan or fill
+const DOMAIN_TIMEOUT_MS = 180000; // a whole domain gives up after this, so one bad site cannot stall a run
 
 // Rejects if the promise does not settle in time. The error text starts with "timed out".
 function withTimeout(promise, ms, label) {
@@ -306,7 +307,7 @@ export class Engine {
     let result;
     try {
       await this.ensureContent(page);
-      result = await withTimeout(page.evaluate(([i, url]) => window.__fillHero.submit(i, url), [pick.form.index, before]), STEP_TIMEOUT_MS, "submit form");
+      result = await withTimeout(page.evaluate(([i, url]) => window.__fillHero.submit(i, url), [pick.form.index, before]), SUBMIT_TIMEOUT_MS, "submit form");
     } catch (err) {
       // A timeout means we cannot tell whether the form went through, so it is never reported as a clean send.
       // A navigation during submit usually means it did.
