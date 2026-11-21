@@ -29,9 +29,12 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
-// Returns the background's reply, or null if it did not answer (for example, while it restarts).
+// Returns the background's reply, or null if it did not answer in time (for example, while it restarts).
+// The limit stops the popup waiting forever on a reply that never comes.
 async function send(msg) {
-  return chrome.runtime.sendMessage(msg).catch(() => null);
+  const reply = chrome.runtime.sendMessage(msg).catch(() => null);
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 20000));
+  return Promise.race([reply, timeout]);
 }
 
 let dryRunLoaded = false; // the dry-run box is read from storage once; after that only the user changes it
