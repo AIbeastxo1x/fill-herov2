@@ -101,6 +101,29 @@ async function refresh() {
 
 // ---------- extension licences ----------
 
+// What the list shows for one key: revoked, expired, or active with its expiry date.
+function licenceStatusText(l) {
+  if (l.status !== "active") return "revoked";
+  if (!l.expiresAt) return "active, no expiry";
+  const when = new Date(l.expiresAt);
+  if (Date.now() >= l.expiresAt) return `expired ${when.toLocaleDateString()}`;
+  return `expires ${when.toLocaleDateString()}`;
+}
+
+// The duration in days from the form, or null if it is not valid.
+function chosenDays() {
+  const choice = $("l-duration").value;
+  if (choice === "custom") {
+    const n = Number($("l-custom-days").value);
+    return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : null;
+  }
+  return Number(choice);
+}
+
+$("l-duration").addEventListener("change", () => {
+  $("l-custom-days").hidden = $("l-duration").value !== "custom";
+});
+
 async function refreshLicences() {
   try {
     const d = await (await api("/licences")).json();
@@ -113,7 +136,7 @@ async function refreshLicences() {
             who.textContent = l.customer;
             const status = document.createElement("td");
             status.className = "num";
-            status.textContent = l.status === "active" ? `issued ${l.issuedAt ? new Date(l.issuedAt).toLocaleDateString() : ""}` : "revoked";
+            status.textContent = licenceStatusText(l);
             const action = document.createElement("td");
             action.className = "num";
             if (l.status === "active") {
@@ -150,13 +173,19 @@ $("issue-licence").addEventListener("click", async () => {
     $("l-msg").textContent = "Enter who the licence is for.";
     return;
   }
+  const days = chosenDays();
+  if (days === null) {
+    $("l-msg").textContent = "Enter a whole number of days from 1 to 3650.";
+    return;
+  }
   try {
-    const r = await api("/licences", { method: "POST", body: { customer } });
+    const r = await api("/licences", { method: "POST", body: { customer, days } });
     const d = await r.json();
     $("l-key").textContent = d.key;
     $("l-new").hidden = false;
     $("l-customer").value = "";
-    $("l-msg").textContent = `Issued to ${d.customer}.`;
+    const term = d.expiresAt ? `for ${days} ${days === 1 ? "day" : "days"}, until ${new Date(d.expiresAt).toLocaleDateString()}` : "with no expiry";
+    $("l-msg").textContent = `Issued to ${d.customer} ${term}.`;
   } catch (err) {
     if (err.message !== SIGNED_OUT) $("l-msg").textContent = `Not issued: ${err.message}`;
   }

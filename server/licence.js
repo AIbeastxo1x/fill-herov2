@@ -16,11 +16,17 @@ export function hashKey(key) {
   return crypto.createHash("sha256").update(String(key).trim().toUpperCase()).digest("hex");
 }
 
+// days: how long the key lasts. 0 means no expiry.
 // Returns the new licence (with its key, shown once) and the list with the key left out.
-export function issueLicence(licences, customer, now = Date.now()) {
+export function issueLicence(licences, customer, days = 0, now = Date.now()) {
   const key = generateKey();
-  const licence = { id: crypto.randomBytes(6).toString("hex"), customer, keyHash: hashKey(key), status: "active", issuedAt: now };
+  const expiresAt = days > 0 ? now + days * 24 * 60 * 60 * 1000 : null;
+  const licence = { id: crypto.randomBytes(6).toString("hex"), customer, keyHash: hashKey(key), status: "active", issuedAt: now, expiresAt };
   return { key, licence, licences: [...licences, licence] };
+}
+
+export function isLicenceExpired(licence, now = Date.now()) {
+  return Boolean(licence.expiresAt) && now >= licence.expiresAt;
 }
 
 export function revokeLicence(licences, id, now = Date.now()) {

@@ -130,6 +130,7 @@ const LICENCE_REASONS = {
   "cannot-check-licence": "Could not check the key, and its last check is too old. Connect to the internet and try again.",
   "too-many-tries": "Too many attempts. Wait ten minutes and try again.",
   "build-not-approved": "The server does not approve this build. Add its fingerprint to APPROVED_BUILDS on the server.",
+  expired: "This key has expired. Ask for a new key.",
 };
 
 function describeLicence(status) {
@@ -143,24 +144,34 @@ let unlocked = false;
 async function refreshLicence() {
   const status = await send({ type: "licenceStatus" });
   if (!status) return;
-  $("licence-status").textContent = describeLicence(status);
   unlocked = status.valid;
   $("app").hidden = !unlocked;
+  $("licence-entry").hidden = status.valid;
+  $("licence-active").hidden = !status.valid;
+  if (status.valid) {
+    $("lic-name").textContent = `Licensed to ${status.customer || "you"}`;
+    $("lic-days").textContent =
+      status.daysLeft === null ? "No expiry" : `${status.daysLeft} ${status.daysLeft === 1 ? "day" : "days"} left`;
+    $("licence-status").textContent = "";
+  } else {
+    $("licence-status").textContent = describeLicence(status);
+  }
 }
 
+// The result of the last Activate press. The regular refresh never replaces it.
 $("licence-save").addEventListener("click", async () => {
   const key = $("licence-key").value.trim();
-  $("licence-status").textContent = "Checking…";
+  $("licence-msg").textContent = "Checking…";
   const res = await send({ type: "setLicence", key });
-  // The result of this check is shown as it is. The regular refresh does not replace it.
   if (!res) {
-    $("licence-status").textContent = "The extension did not respond. Reload it and try again.";
+    $("licence-msg").textContent = "The extension did not respond. Reload it and try again.";
   } else if (res.allowed) {
     $("licence-key").value = "";
-    $("licence-status").textContent = "Licence accepted.";
+    $("licence-msg").textContent = "Licence accepted.";
   } else {
-    $("licence-status").textContent = LICENCE_REASONS[res.reason] ?? `Licence not accepted (${res.reason}).`;
+    $("licence-msg").textContent = LICENCE_REASONS[res.reason] ?? `Licence not accepted (${res.reason}).`;
   }
+  refreshLicence();
 });
 
 refreshLicence();

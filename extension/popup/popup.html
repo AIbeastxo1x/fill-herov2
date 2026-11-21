@@ -20,6 +20,8 @@
   table.report td { border-bottom: 1px solid #ddd; font-size: 12px; }
   table.report td.num { text-align: right; font-variant-numeric: tabular-nums; }
   button.danger { color: #b00020; border-color: #b00020; }
+  .licence-card { border: 1px solid #ccc; border-radius: 6px; padding: 8px; margin-bottom: 4px; }
+  .licence-card h2 { margin-top: 0; }
   @media (prefers-color-scheme: dark) {
     body { color: #f2f2f2; background: #1e1e1e; }
     label, .help { color: #aaa; }
@@ -29,12 +31,21 @@
 </style>
 </head>
 <body>
-  <h2>Licence</h2>
-  <div class="row">
-    <input type="text" id="licence-key" placeholder="FH-XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off" spellcheck="false">
-    <button id="licence-save">Activate</button>
+  <div class="licence-card">
+    <h2>Licence</h2>
+    <div id="licence-entry" hidden>
+      <div class="row">
+        <input type="text" id="licence-key" placeholder="FH-XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off" spellcheck="false">
+        <button id="licence-save">Activate</button>
+      </div>
+    </div>
+    <div id="licence-active" hidden>
+      <div class="status" id="lic-name"></div>
+      <div class="help" id="lic-days"></div>
+    </div>
+    <div class="help" id="licence-status">Checking…</div>
+    <div class="help" id="licence-msg"></div>
   </div>
-  <div class="help" id="licence-status">Checking…</div>
 
   <div id="app" hidden>
   <h2>Domains</h2>

@@ -9,7 +9,7 @@ import { buildEmailsFile, buildCaptchaFile } from "../src/lib/files.js";
 import { pendingRecipients } from "./campaign.js";
 import { encryptSecret } from "./mailer.js";
 import { readUnsubscribeToken } from "./unsubscribe.js";
-import { issueLicence, revokeLicence, findLicence, makeAttemptLimiter } from "./licence.js";
+import { issueLicence, revokeLicence, findLicence, makeAttemptLimiter, isLicenceExpired } from "./licence.js";
 
 const UNSUBSCRIBE_PAGE = (title, text) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title></head><body><h1>${title}</h1><p>${text}</p></body></html>`;
@@ -172,7 +172,8 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
         licenceLimiter.failed(ip);
         return res.json({ valid: false, reason: "build-not-approved" });
       }
-      return res.json({ valid: true, customer: licence.customer });
+      if (isLicenceExpired(licence)) return res.json({ valid: false, reason: "expired" });
+      return res.json({ valid: true, customer: licence.customer, expiresAt: licence.expiresAt ?? null });
     }
     licenceLimiter.failed(ip);
     return res.json({ valid: false, reason: "not-valid" });
@@ -231,10 +232,12 @@ export function createApp({ store, engine, token, origins = [], campaigns = null
     try {
       const customer = typeof req.body?.customer === "string" ? req.body.customer.trim() : "";
       if (!customer || customer.length > 200) throw httpError(400, "say who the licence is for (up to 200 characters)");
-      const issued = issueLicence(store.get().licences, customer);
+      const days = req.body?.days ?? 30;
+      if (!Number.isInteger(days) || days < 0 || days > 3650) throw httpError(400, "duration must be a whole number of days from 0 (no expiry) to 3650");
+      const issued = issueLicence(store.get().licences, customer, days);
       store.set({ licences: issued.licences });
       // The key is returned once. It cannot be looked up again.
-      res.status(201).json({ key: issued.key, id: issued.licence.id, customer });
+      res.status(201).json({ key: issued.key, id: issued.licence.id, customer, expiresAt: issued.licence.expiresAt });
     } catch (err) {
       next(err);
     }

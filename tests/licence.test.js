@@ -1,4 +1,4 @@
-// Licence tests: key format, hashed storage, the server's verify and admin routes, the attempt limit,
+﻿// Licence tests: key format, hashed storage, the server's verify and admin routes, the attempt limit,
 // and the extension's decision rules (src/lib/licence.js).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -77,7 +77,7 @@ test("verify says valid for an active key and not valid after revocation", async
   try {
     const issued = await (await srv.call("/api/licences", { method: "POST", body: { customer: "Acme" } })).json();
     let v = await (await srv.call("/licence/verify", { method: "POST", body: { key: issued.key }, token: "" })).json();
-    assert.deepEqual(v, { valid: true, customer: "Acme" });
+    assert.equal(v.valid, true); assert.equal(v.customer, "Acme");
 
     const rv = await srv.call(`/api/licences/${issued.id}/revoke`, { method: "POST" });
     assert.equal(rv.status, 200);
@@ -118,7 +118,7 @@ test("with APPROVED_BUILDS set, only an approved build gets a valid answer", asy
     const issued = issueLicence([], "Acme");
     store.set({ licences: issued.licences });
 
-    assert.deepEqual(await verify({ key: issued.key, build: "APPROVED1" }), { valid: true, customer: "Acme" });
+    const ok = await verify({ key: issued.key, build: "APPROVED1" }); assert.equal(ok.valid, true); assert.equal(ok.customer, "Acme");
     assert.equal((await verify({ key: issued.key, build: "EDITED-COPY" })).valid, false);
     assert.equal((await verify({ key: issued.key })).valid, false, "no build sent is refused when builds are approved");
   } finally {
@@ -171,7 +171,7 @@ test("the extension checks the server at most once a day", () => {
 test("a valid server answer allows the run and saves the check", () => {
   const d = decide(null, "K", 5, { valid: true, customer: "Acme" });
   assert.equal(d.allowed, true);
-  assert.deepEqual(d.cache, { key: "K", checkedAt: 5, valid: true, customer: "Acme" });
+  assert.deepEqual(d.cache, { key: "K", checkedAt: 5, valid: true, customer: "Acme", expiresAt: null });
 });
 
 test("an invalid answer refuses the run even if an older check was valid", () => {
@@ -187,6 +187,54 @@ test("with no server answer, a recent valid key works and an old one does not", 
   assert.equal(decide(recent, "K", now, null).allowed, true);
   const old = { key: "K", checkedAt: now - GRACE_MS - 1000, valid: true, customer: "Acme" };
   assert.equal(decide(old, "K", now, null).allowed, false);
+});
+
+test("a key with a duration is stored with its expiry date; 0 means no expiry", () => {
+  const now = 1000;
+  const timed = issueLicence([], "Acme", 30, now).licence;
+  assert.equal(timed.expiresAt, now + 30 * DAY);
+  const forever = issueLicence([], "Acme", 0, now).licence;
+  assert.equal(forever.expiresAt, null);
+});
+
+test("the server refuses an expired key, and a key still in its term is valid", async () => {
+  const store = await newStore();
+  const past = issueLicence([], "Old", 1, Date.now() - 2 * DAY);
+  store.set({ licences: past.licences });
+  const current = issueLicence(past.licences, "New", 30);
+  store.set({ licences: current.licences });
+  const srv = await serve(store);
+  try {
+    const expired = await (await srv.call("/licence/verify", { method: "POST", body: { key: past.key }, token: "" })).json();
+    assert.equal(expired.valid, false);
+    assert.equal(expired.reason, "expired");
+    const live = await (await srv.call("/licence/verify", { method: "POST", body: { key: current.key }, token: "" })).json();
+    assert.equal(live.valid, true);
+    assert.equal(typeof live.expiresAt, "number");
+  } finally {
+    srv.close();
+  }
+});
+
+test("issuing rejects a duration that is not a whole number of days in range", async () => {
+  const store = await newStore();
+  const srv = await serve(store);
+  try {
+    for (const days of [-1, 1.5, 4000, "30"]) {
+      const r = await srv.call("/api/licences", { method: "POST", body: { customer: "Acme", days } });
+      assert.equal(r.status, 400, `days=${days}`);
+    }
+    assert.equal(store.get().licences.length, 0);
+  } finally {
+    srv.close();
+  }
+});
+
+test("an expired key is never valid, even inside the offline grace period", () => {
+  const now = 10 * DAY;
+  const cache = { key: "K", checkedAt: now - 1000, valid: true, customer: "Acme", expiresAt: now - 1 };
+  assert.equal(decide(cache, "K", now, null).allowed, false);
+  assert.equal(needsCheck(cache, now), true);
 });
 
 test("no key means no run, whatever the server says", () => {
