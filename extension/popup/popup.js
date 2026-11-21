@@ -138,10 +138,14 @@ function describeLicence(status) {
   return "Key saved, but not checked yet. Press Activate.";
 }
 
+// The rest of the popup stays hidden until the licence is verified.
+let unlocked = false;
 async function refreshLicence() {
   const status = await send({ type: "licenceStatus" });
   if (!status) return;
   $("licence-status").textContent = describeLicence(status);
+  unlocked = status.valid;
+  $("app").hidden = !unlocked;
 }
 
 $("licence-save").addEventListener("click", async () => {
@@ -159,7 +163,6 @@ $("licence-save").addEventListener("click", async () => {
   }
 });
 
-refresh();
 refreshLicence();
-setInterval(refresh, 2000);
-setInterval(refreshLicence, 60000);
+setInterval(refreshLicence, 2000);
+setInterval(() => { if (unlocked) refresh(); }, 2000);

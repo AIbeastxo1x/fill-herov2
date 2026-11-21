@@ -8,7 +8,7 @@ import { buildFillPlan, summarizePlan } from "./lib/fillPlan.js";
 import { siteLanguage, needsTranslation } from "./lib/language.js";
 import { extractEmails, emailsToCsv } from "./lib/emails.js";
 import { buildEmailsFile, buildCaptchaFile, dataUrl, EMAIL_FILE, CAPTCHA_FILE } from "./lib/files.js";
-import { needsCheck, decide } from "./lib/licence.js";
+import { needsCheck, decide, GRACE_MS } from "./lib/licence.js";
 
 const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 const MAX_CONTACT_PAGES = 3;
@@ -455,7 +455,8 @@ async function licenceStatus() {
   const s = await chrome.storage.local.get(["licenceKey", "licenceCache"]);
   const key = s.licenceKey || "";
   const cache = s.licenceCache || null;
-  const valid = Boolean(key && cache && cache.key === key && cache.valid);
+  // Valid only if the last successful check is recent enough (the same grace period used for offline work).
+  const valid = Boolean(key && cache && cache.key === key && cache.valid && Date.now() - (cache.checkedAt || 0) < GRACE_MS);
   return { hasKey: Boolean(key), valid, customer: valid ? cache.customer || "" : "", checkedAt: cache?.checkedAt || 0 };
 }
 
