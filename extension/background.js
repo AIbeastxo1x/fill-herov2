@@ -12,11 +12,20 @@ import { buildEmailsFile, buildCaptchaFile, dataUrl, EMAIL_FILE, CAPTCHA_FILE } 
 const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 const MAX_CONTACT_PAGES = 3;
 const MAX_TABS = 5;
-const STEP_TIMEOUT_MS = 20000; // any single page step gives up after this
-const TRANSLATE_TIMEOUT_MS = 60000; // the first on-device translation may download a model, so it gets longer
-const SUBMIT_TIMEOUT_MS = 60000; // submitting can be slow on some sites, so it gets longer than a scan or fill
-const DOMAIN_TIMEOUT_MS = 180000; // a whole domain gives up after this, so one bad site cannot stall a run
-const HISTORY_CLEAR_EVERY = 500; // domain visits between history clean-ups
+// Time limits. Tests may override them through globalThis.__FILLHERO_TEST__; the defaults are used otherwise.
+const CFG = {
+  stepMs: 20000, // any single page step gives up after this
+  translateMs: 60000, // the first on-device translation may download a model, so it gets longer
+  submitMs: 60000, // submitting can be slow on some sites, so it gets longer than a scan or fill
+  domainMs: 180000, // a whole domain gives up after this, so one bad site cannot stall a run
+  historyEvery: 500, // domain visits between history clean-ups
+  ...(globalThis.__FILLHERO_TEST__ ?? {}),
+};
+const STEP_TIMEOUT_MS = CFG.stepMs;
+const TRANSLATE_TIMEOUT_MS = CFG.translateMs;
+const SUBMIT_TIMEOUT_MS = CFG.submitMs;
+const DOMAIN_TIMEOUT_MS = CFG.domainMs;
+const HISTORY_CLEAR_EVERY = CFG.historyEvery;
 const DEFAULT_PROFILE = {
   firstName: "",
   lastName: "",
@@ -529,7 +538,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (running) return sendResponse({ ok: false, reason: "already-running" });
         if (msg.profile) await save({ profile: msg.profile });
         await save({ dryRun: !!msg.dryRun });
-        runLoop(parseDomainList(msg.domains));
+        runLoop(parseDomainList(msg.domains)).catch((err) => console.error("run failed:", err?.message ?? err));
         return sendResponse({ ok: true });
       case "stop":
         stopRequested = true;

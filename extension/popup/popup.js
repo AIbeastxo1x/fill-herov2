@@ -29,13 +29,19 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// Returns the background's reply, or null if it did not answer (for example, while it restarts).
 async function send(msg) {
-  return chrome.runtime.sendMessage(msg);
+  return chrome.runtime.sendMessage(msg).catch(() => null);
 }
+
+let dryRunLoaded = false; // the dry-run box is read from storage once; after that only the user changes it
 
 function render(state) {
   $("running").textContent = state.running ? "Running…" : "";
-  $("dryrun").checked = !!state.dryRun;
+  if (!dryRunLoaded) {
+    $("dryrun").checked = !!state.dryRun;
+    dryRunLoaded = true;
+  }
 
   for (const [id, key] of Object.entries(PROFILE_FIELDS)) {
     if (document.activeElement !== $(id)) $(id).value = state.profile[key] ?? (key === "template" ? DEFAULT_TEMPLATE : "");
@@ -65,14 +71,16 @@ function localDate(date = new Date()) {
 }
 
 async function refresh() {
-  render(await send({ type: "state" }));
+  const state = await send({ type: "state" });
+  if (state) render(state);
 }
 
 $("start").addEventListener("click", async () => {
   const domains = $("domains").value;
   if (!domains.trim()) return;
   const res = await send({ type: "start", domains, dryRun: $("dryrun").checked, profile: readProfile() });
-  if (!res.ok) alert("Already running.");
+  if (!res) alert("The extension did not respond. Reload it in chrome://extensions and try again.");
+  else if (!res.ok) alert("Already running.");
   refresh();
 });
 
@@ -93,7 +101,7 @@ $("save-captcha").addEventListener("click", async () => {
 $("clear-all").addEventListener("click", async () => {
   if (!confirm("Clear the log, review queue, extracted emails and CAPTCHA list?\n\nYour profile, domains and sent-domain record are kept.")) return;
   const res = await send({ type: "clearAll" });
-  if (!res.ok) alert("Stop the run first.");
+  if (res && !res.ok) alert("Stop the run first.");
   refresh();
 });
 
