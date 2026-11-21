@@ -509,23 +509,40 @@ async function countVisitAndMaybeClear() {
 
 // ---------- run loop ----------
 
-// One domain at a time. A tab is closed after its form is submitted successfully.
-// Dry-run and queued tabs stay open for review; the oldest of those closes when
-// more than MAX_TABS would be open.
+// Closes every tab this extension opened and is still tracking, including review tabs.
+async function closeAllManagedTabs() {
+  for (const id of [...managedTabs]) await closeTab(id);
+}
+
+// Shows a desktop notification with the results. Quietly skipped if notifications are blocked.
+async function notifyRunFinished(counts, stopped) {
+  const title = stopped ? "Fill Hero: run stopped" : "Fill Hero: run finished";
+  const message = `${counts.sent} sent, ${counts.queued} queued for review, ${counts.failed} failed, ${counts.skipped} skipped.`;
+  try {
+    await chrome.notifications.create({ type: "basic", iconUrl: chrome.runtime.getURL("icon.png"), title, message });
+  } catch {
+    // The run has already finished; a blocked notification must not matter.
+  }
+}
+
+// One domain at a time. When the run ends, every tab it opened is closed and a notification is shown.
 async function runLoop(domains) {
   running = true;
   stopRequested = false;
   const { dryRun } = await getAll();
+  const counts = { sent: 0, queued: 0, failed: 0, skipped: 0 };
   try {
     for (const entry of domains) {
       if (stopRequested) break;
       if (!entry.ok) {
         await logEntry({ host: entry.input, status: "failed", reason: entry.reason, pageUrl: "" });
+        counts.failed++;
         continue;
       }
       const { log, profile, sentHosts } = await getAll();
       if (hasSent(log, entry.host) || sentHosts.includes(entry.host)) {
         await logEntry({ host: entry.host, status: "skipped", reason: "already-sent", pageUrl: entry.url });
+        counts.skipped++;
         continue;
       }
 
@@ -544,19 +561,23 @@ async function runLoop(domains) {
           const reason = r.reason;
           if (reason.startsWith("captcha")) await storeCaptchaDomain(entry.host, r.pageUrl);
           await queueEntry({ host: entry.host, url: entry.url, reason, pageUrl: r.pageUrl });
-          keepOpen = true; // for review
+          counts.queued++;
         } else {
           await logEntry({ host: entry.host, status: r.status, reason: r.reason, pageUrl: r.pageUrl });
-          if (r.status === "sent?") keepOpen = true; // unverified: leave for a look
+          if (r.status.startsWith("sent")) counts.sent++;
+          else if (r.status === "failed") counts.failed++;
+          else counts.skipped++;
         }
       } catch (err) {
-        keepOpen = false; // a stuck or stopped tab is never left open for review
+        keepOpen = false; // a stuck or stopped tab is never left open
         const reason = stopRequested
           ? "stopped by the user"
           : isTimeout(err)
             ? `timed out after ${DOMAIN_TIMEOUT_MS / 1000} s; nothing more was done here`
             : String(err?.message ?? err);
         await logEntry({ host: entry.host, status: stopRequested ? "skipped" : "failed", reason, pageUrl: entry.url });
+        if (stopRequested) counts.skipped++;
+        else counts.failed++;
       } finally {
         // Addresses are kept only for sites with no usable form.
         const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
@@ -567,11 +588,15 @@ async function runLoop(domains) {
       }
     }
   } finally {
+    const stopped = stopRequested;
     running = false;
     stopRequested = false;
     // Refresh the two text files at the end of every run. A failed save must not break the run.
     await saveEmailsFile().catch(() => {});
     await saveCaptchaFile().catch(() => {});
+    // The run is over: close every tab it opened, then say so.
+    await closeAllManagedTabs().catch(() => {});
+    await notifyRunFinished(counts, stopped);
   }
 }
 

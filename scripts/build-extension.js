@@ -54,6 +54,7 @@ export async function buildExtension() {
   await fs.writeFile(path.join(OUT, "popup", "popup.js"), obfuscate(await fs.readFile(path.join(SRC, "popup", "popup.js"), "utf8")));
   await fs.copyFile(path.join(SRC, "popup", "popup.html"), path.join(OUT, "popup", "popup.html"));
   await fs.copyFile(path.join(SRC, "manifest.json"), path.join(OUT, "manifest.json"));
+  await fs.copyFile(path.join(SRC, "icon.png"), path.join(OUT, "icon.png"));
   return OUT;
 }
 

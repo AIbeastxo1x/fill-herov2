@@ -5,7 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 // Short limits, so the tests run in seconds. Read once when the service worker loads.
-globalThis.__FILLHERO_TEST__ = { stepMs: 300, submitMs: 300, translateMs: 300, domainMs: 1000, historyEvery: 2, licenceUrl: "https://licence.test/verify" };
+// domainMs is long enough for a normal domain (which includes retry pauses) and short enough to test the limit.
+globalThis.__FILLHERO_TEST__ = { stepMs: 300, submitMs: 300, translateMs: 300, domainMs: 4000, historyEvery: 2, licenceUrl: "https://licence.test/verify" };
 
 const TEST_KEY = "FH-TEST1-TEST2-TEST3-TEST4";
 const OTHER_KEY = "FH-OTHE1-OTHE2-OTHE3-OTHE4";
@@ -25,6 +26,7 @@ const tabs = new Map(); // id -> { url, hang }
 const pending = new Map(); // tabId -> reject functions for calls that will never answer
 const removed = [];
 const historyDeleted = [];
+const notified = []; // desktop notifications shown by the extension
 const listeners = { updated: new Set(), removed: new Set(), message: null };
 let nextId = 1;
 let hangNewTabs = false; // when true, the page never answers script or message calls
@@ -99,11 +101,17 @@ globalThis.chrome = {
       return [{ result: func ? [] : undefined }];
     },
   },
+  downloads: { async download() { return {}; } },
+  notifications: {
+    async create(options) {
+      notified.push(options);
+      return "fh";
+    },
+  },
   runtime: {
     onMessage: { addListener: (fn) => (listeners.message = fn) },
-    sendMessage: undefined,
+    getURL: (file) => `chrome-extension://test/${file}`,
   },
-  downloads: { async download() { return {}; } },
   history: {
     async deleteUrl({ url }) {
       historyDeleted.push(url);
@@ -137,6 +145,7 @@ function resetWorld() {
   pending.clear();
   removed.length = 0;
   historyDeleted.length = 0;
+  notified.length = 0;
   hangNewTabs = false;
   hangTabsGet = false;
   licenceServer.mode = "valid";
@@ -240,6 +249,28 @@ test("if the server cannot be reached and the last check is too old, the run is 
   const res = await ask({ type: "start", domains: "kappa-site.com", dryRun: true, profile: {} });
   assert.equal(res.ok, false);
   assert.equal(res.reason, "cannot-check-licence");
+});
+
+test("a finished run closes every tab it opened and shows one notification with the results", async () => {
+  resetWorld();
+  await startRun("lambda-site.com\nmu-site.com", { dryRun: true });
+  await waitForIdle();
+  assert.equal(tabs.size, 0, `tabs still open: ${[...tabs.keys()].join(", ")}`);
+  assert.equal(notified.length, 1, JSON.stringify(notified));
+  assert.equal(notified[0].title, "Fill Hero: run finished");
+  assert.match(notified[0].message, /2 queued for review/, JSON.stringify(storage.log));
+});
+
+test("Stop also closes the tabs and shows a 'run stopped' notification", async () => {
+  resetWorld();
+  hangNewTabs = true;
+  await startRun("nu-site.com", { dryRun: false });
+  await new Promise((r) => setTimeout(r, 100));
+  await ask({ type: "stop" });
+  await waitForIdle(3000);
+  assert.equal(tabs.size, 0, `tabs still open: ${[...tabs.keys()].join(", ")}`);
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].title, "Fill Hero: run stopped");
 });
 
 test("the history watchdog removes the pages it visited after every batch of visits", async () => {
