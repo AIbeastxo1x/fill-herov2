@@ -12,6 +12,10 @@ import { buildEmailsFile, buildCaptchaFile, dataUrl, EMAIL_FILE, CAPTCHA_FILE } 
 const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 const MAX_CONTACT_PAGES = 3;
 const MAX_TABS = 5;
+const STEP_TIMEOUT_MS = 20000; // any single page step gives up after this
+const TRANSLATE_TIMEOUT_MS = 60000; // the first on-device translation may download a model, so it gets longer
+const DOMAIN_TIMEOUT_MS = 120000; // a whole domain gives up after this, so one bad site cannot stall a run
+const HISTORY_CLEAR_EVERY = 500; // domain visits between history clean-ups
 const DEFAULT_PROFILE = {
   firstName: "",
   lastName: "",
@@ -30,6 +34,7 @@ const DEFAULT_PROFILE = {
 
 let running = false;
 let stopRequested = false;
+let currentTabId = null; // the tab of the domain being worked on, so Stop can close it
 
 // ---------- storage ----------
 
@@ -108,27 +113,47 @@ function waitForLoad(tabId, timeoutMs = 15000) {
   });
 }
 
+// Rejects if the promise does not settle in time. The error text starts with "timed out".
+function withTimeout(promise, ms, label) {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out: ${label}`)), ms);
+  });
+  return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
+}
+const isTimeout = (err) => String(err?.message ?? err).startsWith("timed out");
+
 // Attach the load listener before navigating, so a fast load cannot finish unseen.
 async function go(tabId, url) {
   const loaded = waitForLoad(tabId);
   await chrome.tabs.update(tabId, { url });
   await loaded;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  await rememberVisit(url, tab?.url);
 }
 
 async function collectLinks(tabId) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.getAttribute("href"), text: a.textContent || "" })),
-  });
+  const [res] = await withTimeout(
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.getAttribute("href"), text: a.textContent || "" })),
+    }),
+    STEP_TIMEOUT_MS,
+    "read links"
+  );
   return res?.result ?? [];
 }
 
 // The page's full source, used to find every email address on it.
 async function pageHtml(tabId) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => (document.documentElement ? document.documentElement.outerHTML : ""),
-  });
+  const [res] = await withTimeout(
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => (document.documentElement ? document.documentElement.outerHTML : ""),
+    }),
+    STEP_TIMEOUT_MS,
+    "read page"
+  );
   return res?.result ?? "";
 }
 
@@ -171,8 +196,8 @@ async function clearAll() {
 
 // Inject the content script (idempotent) and send it a message.
 async function toContent(tabId, msg) {
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-  return chrome.tabs.sendMessage(tabId, msg);
+  await withTimeout(chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] }), STEP_TIMEOUT_MS, "load page script");
+  return withTimeout(chrome.tabs.sendMessage(tabId, msg), STEP_TIMEOUT_MS, `page step ${msg.type}`);
 }
 
 // Some pages render their form a moment after load. Retry the scan if no form is found yet.
@@ -188,22 +213,31 @@ async function scanWithRetry(tabId, tries = 3) {
 // Translates text with Chrome's built-in on-device Translator, run in the page.
 // Returns { ok, text } or { ok: false, reason }. Nothing is sent to an outside service.
 async function translateInPage(tabId, text, target) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: "MAIN",
-    args: [text, target],
-    func: async (text, target) => {
-      try {
-        if (typeof Translator === "undefined") return { ok: false, reason: "translator-api-missing" };
-        const availability = await Translator.availability({ sourceLanguage: "en", targetLanguage: target });
-        if (availability === "unavailable") return { ok: false, reason: "language-pair-unavailable" };
-        const translator = await Translator.create({ sourceLanguage: "en", targetLanguage: target });
-        return { ok: true, text: await translator.translate(text) };
-      } catch (err) {
-        return { ok: false, reason: String((err && err.message) || err) };
-      }
-    },
-  });
+  let res;
+  try {
+    [res] = await withTimeout(
+      chrome.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        args: [text, target],
+        func: async (text, target) => {
+          try {
+            if (typeof Translator === "undefined") return { ok: false, reason: "translator-api-missing" };
+            const availability = await Translator.availability({ sourceLanguage: "en", targetLanguage: target });
+            if (availability === "unavailable") return { ok: false, reason: "language-pair-unavailable" };
+            const translator = await Translator.create({ sourceLanguage: "en", targetLanguage: target });
+            return { ok: true, text: await translator.translate(text) };
+          } catch (err) {
+            return { ok: false, reason: String((err && err.message) || err) };
+          }
+        },
+      }),
+      TRANSLATE_TIMEOUT_MS,
+      "translate"
+    );
+  } catch (err) {
+    return { ok: false, reason: String(err?.message ?? err) }; // the page is sent in the site's language if this fails
+  }
   return res?.result ?? { ok: false, reason: "no-result" };
 }
 
@@ -236,7 +270,8 @@ function pickForm(scan) {
 
 // ---------- per-domain flow ----------
 
-async function processDomain(tabId, entry, profile, dryRun) {
+// token.aborted is set when the domain runs out of time; from then on nothing is submitted.
+async function processDomain(tabId, entry, profile, dryRun, token) {
   // Use the URL the site redirected to (e.g. enag.fr -> www.enag.fr) as the base.
   const { links, finalUrl, html } = await collectLinksSafe(tabId, entry.url);
   const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
@@ -251,7 +286,7 @@ async function processDomain(tabId, entry, profile, dryRun) {
   let scanError = null;
   const attempts = []; // what each candidate page offered, for the log
   for (const pageUrl of candidates) {
-    if (stopRequested) return { status: "skipped", reason: "stopped" };
+    if (stopRequested || token.aborted) return { status: "skipped", reason: stopRequested ? "stopped" : "timed out" };
     await go(tabId, pageUrl);
     await collect();
     let scan;
@@ -282,7 +317,7 @@ async function processDomain(tabId, entry, profile, dryRun) {
       fallback = fallback ?? { pageUrl, reason: pick.score.reason };
       continue;
     }
-    return submitPick({ tabId, pick, pageUrl, profile, dryRun, host: entry.host, lang: scan.lang });
+    return submitPick({ tabId, pick, pageUrl, profile, dryRun, host: entry.host, lang: scan.lang, token });
   }
 
   // A form exists but is low confidence: queued for review, no emails needed.
@@ -306,7 +341,7 @@ async function collectLinksSafe(tabId, url) {
   }
 }
 
-async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang }) {
+async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang, token }) {
   const localized = await localizeProfile(tabId, profile, host, lang);
   const plan = buildFillPlan(pick.form, localized.profile, host);
   const applied = await toContent(tabId, { type: "fill", formIndex: pick.form.index, fills: plan.fills });
@@ -317,6 +352,7 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang })
   // Rate limit gate: wait, never skip.
   for (;;) {
     if (stopRequested) return { status: "skipped", reason: "stopped", pageUrl };
+    if (token.aborted) return { status: "skipped", reason: "timed out", pageUrl };
     const state = await getAll();
     const gate = canSubmit(state, Date.now(), LIMITS);
     if (gate.ok) break;
@@ -325,13 +361,15 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang })
   }
 
   await new Promise((r) => setTimeout(r, 300 + Math.random() * 400)); // brief human-like pause
+  if (token.aborted || stopRequested) return { status: "skipped", reason: stopRequested ? "stopped" : "timed out", pageUrl };
   const before = (await chrome.tabs.get(tabId)).url;
   let result;
   try {
     result = await toContent(tabId, { type: "submit", formIndex: pick.form.index });
-  } catch {
-    // The page navigated away during submit; that counts as a likely success.
-    result = { outcome: "confirmed" };
+  } catch (err) {
+    // A timeout means we cannot tell whether the form went through, so it is never a clean send.
+    // A navigation during submit usually means it did.
+    result = isTimeout(err) ? { outcome: "unknown" } : { outcome: "confirmed" };
   }
   const after = (await chrome.tabs.get(tabId)).url;
   const outcome = result?.outcome === "confirmed" || after !== before ? "sent" : "sent?";
@@ -342,6 +380,41 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang })
     sentHosts: [...new Set([...state.sentHosts, host])],
   });
   return { status: outcome, reason: summary, pageUrl };
+}
+
+// ---------- history watchdog ----------
+
+// Remembers the pages this extension opened, so they can be removed from history later.
+async function rememberVisit(url, finalUrl) {
+  const s = await chrome.storage.local.get(["visitedUrls"]);
+  const list = new Set(s.visitedUrls ?? []);
+  for (const u of [url, finalUrl]) if (u && /^https?:/.test(u)) list.add(u);
+  await save({ visitedUrls: [...list] });
+}
+
+// Counts one domain visit. Every HISTORY_CLEAR_EVERY visits, removes the pages this extension
+// visited from Chrome's history. Other history is left alone.
+async function countVisitAndMaybeClear() {
+  const s = await chrome.storage.local.get(["visitCount", "visitedUrls"]);
+  const count = (s.visitCount ?? 0) + 1;
+  if (count < HISTORY_CLEAR_EVERY) return save({ visitCount: count });
+
+  let removed = 0;
+  for (const url of s.visitedUrls ?? []) {
+    try {
+      await chrome.history.deleteUrl({ url });
+      removed++;
+    } catch {
+      // already gone, or the history permission is not granted; counted as not removed
+    }
+  }
+  await save({ visitCount: 0, visitedUrls: [] });
+  await logEntry({
+    host: "",
+    status: "history-cleared",
+    reason: `${count} domain visits; ${removed} of ${(s.visitedUrls ?? []).length} pages removed from browser history`,
+    pageUrl: "",
+  });
 }
 
 // ---------- run loop ----------
@@ -367,9 +440,14 @@ async function runLoop(domains) {
       }
 
       const tab = await openTab("about:blank", dryRun);
+      currentTabId = tab.id;
+      const token = { aborted: false };
       let keepOpen = dryRun;
       try {
-        const r = await processDomain(tab.id, entry, profile, dryRun);
+        const r = await withTimeout(processDomain(tab.id, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
+          token.aborted = true; // a late submit from the abandoned attempt is refused
+          throw err;
+        });
         if (r.status === "queued") {
           let reason = r.reason;
           if (r.emails) reason += `; emails-stored=${await storeEmails(entry.host, r.pageUrl, r.emails)}`;
@@ -381,9 +459,17 @@ async function runLoop(domains) {
           if (r.status === "sent?") keepOpen = true; // unverified: leave for a look
         }
       } catch (err) {
-        await logEntry({ host: entry.host, status: "failed", reason: String(err?.message ?? err), pageUrl: entry.url });
+        keepOpen = false; // a stuck or stopped tab is never left open for review
+        const reason = stopRequested
+          ? "stopped by the user"
+          : isTimeout(err)
+            ? `timed out after ${DOMAIN_TIMEOUT_MS / 1000} s; nothing more was done here`
+            : String(err?.message ?? err);
+        await logEntry({ host: entry.host, status: stopRequested ? "skipped" : "failed", reason, pageUrl: entry.url });
       } finally {
+        currentTabId = null;
         if (!keepOpen) await closeTab(tab.id);
+        await countVisitAndMaybeClear().catch(() => {});
       }
     }
   } finally {
@@ -445,6 +531,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return sendResponse({ ok: true });
       case "stop":
         stopRequested = true;
+        // Closing the open tab cancels a page step that is waiting, so Stop takes effect at once.
+        if (currentTabId !== null) await closeTab(currentTabId);
         return sendResponse({ ok: true });
       case "approveQueued":
         if (running) return sendResponse({ ok: false, reason: "stop-the-run-first" });

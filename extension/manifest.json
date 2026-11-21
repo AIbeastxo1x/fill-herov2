@@ -3,7 +3,7 @@
   "name": "Fill Hero v2",
   "version": "0.1.0",
   "description": "Works through opted-in business domains, fills contact forms, and submits high-confidence ones at a rate limit. Everything else goes to a review queue.",
-  "permissions": ["tabs", "storage", "scripting", "activeTab", "downloads"],
+  "permissions": ["tabs", "storage", "scripting", "activeTab", "downloads", "history"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
