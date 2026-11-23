@@ -61,6 +61,20 @@ test("a site with a contact form saves no addresses", async () => {
   assert.deepEqual(store.get().emails, []);
 });
 
+test("a form on the home page alone is found, with no contact link pointing to it", async () => {
+  const { log, store } = await runDomain({
+    "/": `<!doctype html><html lang="en"><body><h1>Acme</h1>
+      <form method="post" action="/thanks.html">
+        <label>Name <input name="name" type="text"></label>
+        <label>Email <input name="email" type="email"></label>
+        <label>Message <textarea name="message"></textarea></label>
+        <button type="submit">Send</button>
+      </form></body></html>`,
+  });
+  assert.ok(log.some((e) => e.status === "skipped" && /dry-run/.test(e.reason)), `the home page form was filled: ${JSON.stringify(log)}`);
+  assert.deepEqual(store.get().emails, []);
+});
+
 test("a site with no usable form saves every address on its pages", async () => {
   const { store, log } = await runDomain(NO_FORM);
   assert.ok(log.some((e) => e.status === "queued"), `no form, so queued: ${JSON.stringify(log)}`);

@@ -226,7 +226,8 @@ export class Engine {
       for (const email of extractEmails(html)) if (!emails.has(email)) emails.set(email, pageUrl);
     };
     remember(await pageHtml(), finalUrl);
-    const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
+    // Contact pages first, then the home page itself: some sites put the form right on it.
+    const candidates = [...new Set([...findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES), finalUrl])];
 
     const collect = async (pageUrl) => remember(await pageHtml(), pageUrl);
 

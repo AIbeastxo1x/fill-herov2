@@ -308,7 +308,8 @@ function pickForm(scan) {
 async function processDomain(tabId, entry, profile, dryRun, token) {
   // Use the URL the site redirected to (e.g. enag.fr -> www.enag.fr) as the base.
   const { links, finalUrl, html } = await collectLinksSafe(tabId, entry.url);
-  const candidates = findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES);
+  // Contact pages first, then the home page itself: some sites put the form right on it.
+  const candidates = [...new Set([...findContactLinks(links, finalUrl).slice(0, MAX_CONTACT_PAGES), finalUrl])];
 
   // Every email address seen on any page of this domain, kept on the token so it is saved whatever the outcome.
   const emails = token.emails;
