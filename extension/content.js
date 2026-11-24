@@ -42,10 +42,15 @@
     return forms[formIndex] || null;
   }
 
-  function scan() {
-    const captcha =
+  function captchaPresent() {
+    return (
       Array.from(document.querySelectorAll("iframe")).some((f) => CAPTCHA_SRC.test(f.src || "")) ||
-      Array.from(document.querySelectorAll("[class]")).some((el) => CAPTCHA_CLASS.test(el.className.toString()));
+      Array.from(document.querySelectorAll("[class]")).some((el) => CAPTCHA_CLASS.test(el.className.toString()))
+    );
+  }
+
+  function scan() {
+    const captcha = captchaPresent();
 
     const forms = formList().map((form, index) => {
       form.setAttribute("data-fh-index", String(index));
@@ -162,39 +167,76 @@
     });
   }
 
-  function thankYouShown() {
-    return /thank you|thanks for|message (has been )?sent/i.test(document.body ? document.body.innerText : "");
+  // How long a submit is watched for a confirmation. Slow sites need this room.
+  const CONFIRM_MS = 12000;
+
+  // Wording a site shows once a message has gone through (English and common other languages).
+  const SUCCESS_TEXT =
+    /thank you|thank-you|thanks for (your|contacting|getting|reaching)|message (has been |was |have been )?(sent|received|submitted)|successfully (sent|submitted|received)|we (have )?(received|got) your|your (message|enquiry|inquiry|request|submission) (has been|was|have been) (sent|received|submitted)|merci|danke|vielen dank|gracias|grazie|obrigad/i;
+  const SUCCESS_PATH = /thank|success|sent|merci|danke|gracias|confirm/i;
+  // Wording a site shows when it refuses a submit.
+  const ERROR_TEXT =
+    /this field is required|field is required|please (enter|fill|provide|select|check|complete|correct)|is invalid|not valid|try again|could not be sent|was not sent|failed to send|error/i;
+  const ALERT_SELECTOR =
+    "[role='alert'], [aria-live='assertive'], .error, .errors, .invalid-feedback, .form-error, .field-error, .alert-danger, .wpcf7-not-valid-tip, .wpcf7-response-output, .has-error, .is-invalid";
+
+  const bodyText = () => (document.body ? document.body.innerText : "");
+  const alertText = () => Array.from(document.querySelectorAll(ALERT_SELECTOR)).map((el) => el.innerText || "").join(" ").trim();
+
+  // Looks at the page now and says what it shows about the submit.
+  // outcome: "confirmed" (the site said so), "rejected" (the site refused it), or "unverified" (no sign either way).
+  // before: what the page showed before the submit. Text already there does not count as a confirmation.
+  function readOutcome(formIndex, startUrl, before) {
+    const form = getForm(formIndex);
+    const landed = location.href !== startUrl;
+    const text = bodyText();
+    const thanksNow = SUCCESS_TEXT.test(text) && !(before.success && !landed);
+    const pathSaysSent = landed && SUCCESS_PATH.test(location.pathname + location.search);
+    if (thanksNow || pathSaysSent) {
+      return { outcome: "confirmed", reason: thanksNow ? "confirmation text shown" : `landed on ${location.pathname}` };
+    }
+
+    const alerts = alertText();
+    const errorNow = ERROR_TEXT.test(alerts) && alerts !== before.alerts;
+    const blocked = !!form && form.querySelectorAll(":invalid").length > 0; // the browser refused to send it
+    const captchaNow = !!form && captchaPresent();
+    if (form && (blocked || errorNow || captchaNow)) {
+      const why = blocked ? "a required field is empty or invalid" : captchaNow ? "a CAPTCHA appeared" : "the site showed an error";
+      return { outcome: "rejected", reason: why };
+    }
+    return {
+      outcome: "unverified",
+      reason: landed ? "landed on a page with no confirmation" : form ? "no confirmation, and the form is still there" : "form gone, no confirmation",
+    };
   }
 
   function submit(formIndex, startUrl) {
     return new Promise((resolve) => {
       const form = getForm(formIndex);
-      if (!form) return resolve({ ok: false, outcome: "unverified", reason: "form-not-found" });
+      if (!form) return resolve({ outcome: "unverified", reason: "form-not-found" });
 
-      // A thank-you line already on the page (a footer, say) must not count as this submit's confirmation.
-      const thanksBefore = thankYouShown();
-
+      const before = { success: SUCCESS_TEXT.test(bodyText()), alerts: alertText() };
       if (typeof form.requestSubmit === "function") form.requestSubmit();
       else form.submit();
 
       const started = Date.now();
       const timer = setInterval(() => {
-        const navigated = location.href !== startUrl;
-        const formGone = !getForm(formIndex);
-        const thanksNow = !thanksBefore && thankYouShown();
-        if (navigated || thanksNow || formGone) {
+        const verdict = readOutcome(formIndex, startUrl, before);
+        const waited = Date.now() - started;
+        if (verdict.outcome === "confirmed" || verdict.outcome === "rejected" || waited >= CONFIRM_MS) {
           clearInterval(timer);
-          return resolve({ ok: true, outcome: "confirmed" });
-        }
-        if (Date.now() - started > 5000) {
-          clearInterval(timer);
-          return resolve({ ok: true, outcome: "unverified" });
+          return resolve(verdict);
         }
       }, 250);
     });
   }
 
-  window.__fillHero = { scan, fill, fillAndVerify, submit };
+  // Reads the confirmation on the page a submit landed on. Used when the submit's own page has gone away.
+  function confirm(formIndex, startUrl) {
+    return readOutcome(formIndex, startUrl, { success: false, alerts: "" });
+  }
+
+  window.__fillHero = { scan, fill, fillAndVerify, submit, confirm };
 
   if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.onMessage) return;
 
@@ -210,6 +252,10 @@
     if (msg.type === "submit") {
       submit(msg.formIndex, location.href).then(sendResponse);
       return true; // async response
+    }
+    if (msg.type === "confirm") {
+      sendResponse(confirm(msg.formIndex, msg.startUrl));
+      return false;
     }
     return false;
   });

@@ -47,7 +47,8 @@ export function summarize(s) {
   const counts = {};
   for (const e of s.log) counts[e.status] = (counts[e.status] ?? 0) + 1;
   return {
-    sent: (counts.sent ?? 0) + (counts["sent?"] ?? 0),
+    sent: counts.sent ?? 0, // confirmed by the site
+    unconfirmed: counts["sent?"] ?? 0, // submitted, but the site showed no confirmation: check these by hand
     filledForReview: counts["filled-for-review"] ?? 0,
     queued: counts.queued ?? 0,
     skipped: counts.skipped ?? 0,

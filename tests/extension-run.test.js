@@ -31,6 +31,8 @@ const listeners = { updated: new Set(), removed: new Set(), message: null };
 let nextId = 1;
 let hangNewTabs = false; // when true, the page never answers script or message calls
 let hangTabsGet = false; // when true, the browser's own tab lookup never answers
+let slowMs = 0; // when above 0, each page call takes this long, to see domains working side by side
+let peakOpen = 0; // the most tabs open at the same moment
 
 function never(tabId) {
   return new Promise((_, reject) => {
@@ -39,9 +41,29 @@ function never(tabId) {
   });
 }
 
+// A contact form with a name, an email and a message box: the kind the extension submits by itself.
+const CONTACT_FORM = {
+  index: 0,
+  hasPassword: false,
+  action: "/send",
+  id: "",
+  className: "",
+  fields: [
+    { tag: "input", type: "text", name: "name", id: "", placeholder: "", autocomplete: "", label: "Name", required: false },
+    { tag: "input", type: "email", name: "email", id: "", placeholder: "", autocomplete: "", label: "Email", required: false },
+    { tag: "textarea", type: "textarea", name: "message", id: "", placeholder: "", autocomplete: "", label: "Message", required: false },
+  ],
+};
+let pageSource = ""; // the HTML the page read returns, for testing email extraction
+let tabsGetCalls = 0; // how many times the browser's tab lookup has been asked
+let hangTabsGetAfter = Infinity; // tab lookups after this many never answer, to run a domain out of time part-way
+let formOffered = false; // when true, every page the run visits has the contact form
+let submitVerdict = { outcome: "confirmed", reason: "confirmation text shown" }; // what the page says after a submit
+
 function scanReply(msg) {
-  if (msg.type === "scan") return { forms: [], captcha: false, url: "", lang: "en" };
+  if (msg.type === "scan") return { forms: formOffered ? [CONTACT_FORM] : [], captcha: false, url: "", lang: "en" };
   if (msg.type === "fill") return { ok: true, missing: [], unverified: [], reapplied: 0 };
+  if (msg.type === "submit") return submitVerdict;
   return { ok: true, outcome: "confirmed" };
 }
 
@@ -62,10 +84,12 @@ globalThis.chrome = {
     async create({ url }) {
       const id = nextId++;
       tabs.set(id, { url, hang: hangNewTabs });
+      peakOpen = Math.max(peakOpen, tabs.size);
       return { id, url };
     },
     async get(id) {
-      if (hangTabsGet) return new Promise(() => {});
+      tabsGetCalls++;
+      if (hangTabsGet || tabsGetCalls > hangTabsGetAfter) return new Promise(() => {});
       const t = tabs.get(id);
       if (!t) throw new Error(`No tab with id: ${id}`);
       return { id, url: t.url };
@@ -85,6 +109,7 @@ globalThis.chrome = {
       pending.delete(id);
     },
     async sendMessage(id, msg) {
+      if (slowMs) await new Promise((r) => setTimeout(r, slowMs));
       const t = tabs.get(id);
       if (!t) throw new Error(`No tab with id: ${id}`);
       if (t.hang) return never(id);
@@ -95,10 +120,13 @@ globalThis.chrome = {
   },
   scripting: {
     async executeScript({ target: { tabId }, func }) {
+      if (slowMs) await new Promise((r) => setTimeout(r, slowMs));
       const t = tabs.get(tabId);
       if (!t) throw new Error(`No tab with id: ${tabId}`);
       if (t.hang) return never(tabId);
-      return [{ result: func ? [] : undefined }];
+      // The page source read (outerHTML) returns the test page's text; other page calls return nothing.
+      if (func) return [{ result: func.toString().includes("outerHTML") ? pageSource : [] }];
+      return [{ result: undefined }];
     },
   },
   downloads: { async download() { return {}; } },
@@ -148,6 +176,13 @@ function resetWorld() {
   notified.length = 0;
   hangNewTabs = false;
   hangTabsGet = false;
+  slowMs = 0;
+  peakOpen = 0;
+  formOffered = false;
+  pageSource = "";
+  tabsGetCalls = 0;
+  hangTabsGetAfter = Infinity;
+  submitVerdict = { outcome: "confirmed", reason: "confirmation text shown" };
   licenceServer.mode = "valid";
   licenceServer.calls = 0;
   storage.licenceKey = TEST_KEY;
@@ -273,6 +308,27 @@ test("Stop also closes the tabs and shows a 'run stopped' notification", async (
   assert.equal(notified[0].title, "Fill Hero: run stopped");
 });
 
+test("a site with no usable form has its email addresses saved for the export", async () => {
+  resetWorld();
+  pageSource = `<p>Write to info@nofrm-site.com</p>`;
+  await startRun("nofrm-site.com");
+  await waitForIdle();
+  const saved = (storage.emails ?? []).filter((e) => e.host === "nofrm-site.com").map((e) => e.email);
+  assert.deepEqual(saved, ["info@nofrm-site.com"], JSON.stringify(storage.emails));
+});
+
+test("addresses read before a domain runs out of time are still saved", async () => {
+  resetWorld();
+  pageSource = `<p>Write to timeout-site@example.org</p>`;
+  hangTabsGetAfter = 2; // the domain stalls on its next page, after its home page has been read
+  await startRun("slow-emails.com");
+  await waitForIdle(12000);
+  const row = (storage.log ?? []).find((e) => e.host === "slow-emails.com");
+  assert.match(row?.reason ?? "", /timed out/, JSON.stringify(storage.log));
+  const saved = (storage.emails ?? []).filter((e) => e.host === "slow-emails.com").map((e) => e.email);
+  assert.deepEqual(saved, ["timeout-site@example.org"], JSON.stringify(storage.emails));
+});
+
 function queueItem(host) {
   return { host, url: `https://${host}/`, pageUrl: `https://${host}/contact`, reason: "test", at: Date.now() };
 }
@@ -296,6 +352,58 @@ test("a review tab closes a few seconds after its form is submitted and the page
   listeners.updated.forEach((fn) => fn(tabId, { url: "https://pi-review.com/thanks" }));
   await new Promise((r) => setTimeout(r, 3500));
   assert.equal(tabs.has(tabId), false, "the review tab closed after the submit");
+});
+
+test("a submit the site confirms is counted as sent", async () => {
+  resetWorld();
+  formOffered = true;
+  await startRun("confirm-sent.com", { dryRun: false });
+  await waitForIdle(20000);
+  const row = (storage.log ?? []).find((e) => e.host === "confirm-sent.com");
+  assert.equal(row?.status, "sent", JSON.stringify(storage.log));
+  assert.ok(storage.sentHosts.includes("confirm-sent.com"));
+  assert.match(notified[0].message, /1 confirmed sent/);
+});
+
+test("a submit with no confirmation is 'not confirmed', and that domain is never submitted to again", async () => {
+  resetWorld();
+  formOffered = true;
+  submitVerdict = { outcome: "unverified", reason: "no confirmation, and the form is still there" };
+  await startRun("no-confirm.com", { dryRun: false });
+  await waitForIdle(20000);
+  const row = (storage.log ?? []).find((e) => e.host === "no-confirm.com");
+  assert.equal(row?.status, "sent?", JSON.stringify(storage.log));
+  assert.ok(!(storage.log ?? []).some((e) => e.host === "no-confirm.com" && e.status === "sent"), "never counted as sent");
+  await startRun("no-confirm.com", { dryRun: false });
+  await waitForIdle(20000);
+  const again = (storage.log ?? []).filter((e) => e.host === "no-confirm.com").map((e) => e.status);
+  assert.deepEqual(again, ["sent?", "skipped"], "the second run skipped it");
+});
+
+test("a submit the site refuses goes back to the review queue and is not counted as sent", async () => {
+  resetWorld();
+  formOffered = true;
+  submitVerdict = { outcome: "rejected", reason: "a required field is empty or invalid" };
+  await startRun("refused.com", { dryRun: false });
+  await waitForIdle(20000);
+  const row = (storage.log ?? []).find((e) => e.host === "refused.com");
+  assert.equal(row?.status, "queued", JSON.stringify(storage.log));
+  assert.match(row.reason, /rejected: a required field/);
+  assert.ok((storage.queue ?? []).some((q) => q.host === "refused.com"), "it is in the review queue");
+  assert.ok(!(storage.sentHosts ?? []).includes("refused.com"), "it was not recorded as sent");
+  assert.equal(notified[0].message.includes("1 confirmed sent"), false);
+});
+
+test("five domains are worked on at once, each in its own tab, and all of them finish", async () => {
+  resetWorld();
+  slowMs = 150;
+  const hosts = ["one-fast.com", "two-fast.com", "three-fast.com", "four-fast.com", "five-fast.com", "six-fast.com", "seven-fast.com"];
+  await startRun(hosts.join("\n"), { dryRun: false });
+  await waitForIdle(30000);
+  assert.equal(peakOpen, 5, `most tabs open at once: ${peakOpen}`);
+  assert.equal(tabs.size, 0, "every tab was closed");
+  const logged = (storage.log ?? []).filter((e) => hosts.includes(e.host)).map((e) => e.host);
+  assert.equal(new Set(logged).size, hosts.length, `every domain has a result: ${JSON.stringify(storage.log)}`);
 });
 
 test("the history watchdog removes the pages it visited after every batch of visits", async () => {

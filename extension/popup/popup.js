@@ -53,7 +53,8 @@ function render(state) {
   const counts = {};
   for (const e of state.log) counts[e.status] = (counts[e.status] ?? 0) + 1;
   const rows = [
-    ["Sent", (counts.sent ?? 0) + (counts["sent?"] ?? 0)],
+    ["Sent (confirmed by the site)", counts.sent ?? 0],
+    ["Not confirmed (check the site)", counts["sent?"] ?? 0],
     ["Filled for review", counts["filled-for-review"] ?? 0],
     ["Queued", counts.queued ?? 0],
     ["Skipped", counts.skipped ?? 0],
