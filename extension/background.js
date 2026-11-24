@@ -12,7 +12,8 @@ import { needsCheck, decide, GRACE_MS, isExpired, daysLeft } from "./lib/licence
 
 const LIMITS = { gapMs: 25000, dailyCap: 5000 };
 const MAX_CONTACT_PAGES = 3;
-const MAX_TABS = 5;
+const MAX_TABS = 5; // tabs kept open at once: up to this many domains in progress, plus idle tabs (review, dry run)
+const WORKERS = 5; // domains worked on at the same time, each in its own tab
 // Time limits. Tests may override them through globalThis.__FILLHERO_TEST__; the defaults are used otherwise.
 const CFG = {
   stepMs: 20000, // any single page step gives up after this
@@ -46,7 +47,16 @@ const DEFAULT_PROFILE = {
 
 let running = false;
 let stopRequested = false;
-let currentTabId = null; // the tab of the domain being worked on, so Stop can close it
+const activeTabs = new Set(); // tabs of the domains being worked on now, so Stop can close them
+
+// Storage updates read, change and save the same data. Running them one at a time stops
+// two domains working at once from overwriting each other's changes.
+let storageChain = Promise.resolve();
+function locked(fn) {
+  const run = storageChain.then(fn);
+  storageChain = run.catch(() => {});
+  return run;
+}
 
 // ---------- storage ----------
 
@@ -69,18 +79,22 @@ async function getAll() {
 
 const save = (obj) => chrome.storage.local.set(obj);
 
-async function logEntry(entry) {
+// The two functions below must run inside locked(); they never lock themselves.
+async function appendLog(entry) {
   const { log } = await getAll();
   await save({ log: addLog(log, { ...entry, at: Date.now() }) });
 }
 
-async function queueEntry(entry) {
-  const { queue } = await getAll();
-  await save({ queue: [...queue.filter((q) => q.host !== entry.host), { ...entry, at: Date.now() }] });
-  await logEntry({ host: entry.host, status: "queued", reason: entry.reason, pageUrl: entry.pageUrl });
-}
+const logEntry = (entry) => locked(() => appendLog(entry));
 
-// ---------- tab management (at most MAX_TABS open at once) ----------
+const queueEntry = (entry) =>
+  locked(async () => {
+    const { queue } = await getAll();
+    await save({ queue: [...queue.filter((q) => q.host !== entry.host), { ...entry, at: Date.now() }] });
+    await appendLog({ host: entry.host, status: "queued", reason: entry.reason, pageUrl: entry.pageUrl });
+  });
+
+// ---------- tab management ----------
 
 // Tabs this extension opened, oldest first. A tab leaves the list when it is closed
 // by us or by the user.
@@ -92,6 +106,7 @@ const reviewTabs = new Map();
 chrome.tabs.onRemoved.addListener((id) => {
   const i = managedTabs.indexOf(id);
   if (i >= 0) managedTabs.splice(i, 1);
+  activeTabs.delete(id);
   reviewTabs.delete(id);
 });
 
@@ -112,21 +127,24 @@ async function closeReviewTabs() {
   for (const id of [...reviewTabs.keys()]) await closeReviewTab(id);
 }
 
-// Opens a tab. If MAX_TABS are already open, closes the oldest one first.
-// Safe because runs are sequential, and approveQueued is refused during a run.
-async function openTab(url, active) {
-  while (managedTabs.length >= MAX_TABS) {
-    const victim = managedTabs.shift();
-    await chrome.tabs.remove(victim).catch(() => {});
+// Opens a tab. If MAX_TABS idle tabs are already open, closes the oldest idle one first.
+// A tab in use by a domain being worked on is never closed here. busy: the tab is in use from the start.
+async function openTab(url, active, busy = false) {
+  for (;;) {
+    const idle = managedTabs.filter((id) => !activeTabs.has(id));
+    if (idle.length < MAX_TABS) break;
+    await closeTab(idle[0]);
   }
   const tab = await chrome.tabs.create({ url, active });
   managedTabs.push(tab.id);
+  if (busy) activeTabs.add(tab.id);
   return tab;
 }
 
 async function closeTab(id) {
   const i = managedTabs.indexOf(id);
   if (i >= 0) managedTabs.splice(i, 1);
+  activeTabs.delete(id);
   await chrome.tabs.remove(id).catch(() => {});
 }
 
@@ -156,6 +174,31 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, limit]).finally(() => clearTimeout(timer));
 }
 const isTimeout = (err) => String(err?.message ?? err).startsWith("timed out");
+
+// Like withTimeout, but the clock does not run while the domain waits for its turn to submit
+// (token.waiting), since that wait is the rate limit, not a stuck site.
+function withDeadline(promise, ms, label, token) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const arm = (delay) => {
+      timer = setTimeout(() => {
+        if (token.waiting) return arm(5000);
+        reject(new Error(`timed out: ${label}`));
+      }, delay);
+    };
+    arm(ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 // Attach the load listener before navigating, so a fast load cannot finish unseen.
 async function go(tabId, url) {
@@ -192,19 +235,23 @@ async function pageHtml(tabId) {
 }
 
 // Stores new addresses for a host. items: [{ email, pageUrl }]. Returns how many were new.
-async function storeEmails(host, items) {
-  const { emails } = await getAll();
-  const known = new Set(emails.filter((e) => e.host === host).map((e) => e.email));
-  const at = Date.now();
-  const fresh = items.filter((i) => !known.has(i.email)).map((i) => ({ host, email: i.email, pageUrl: i.pageUrl, at }));
-  if (fresh.length) await save({ emails: [...emails, ...fresh] });
-  return fresh.length;
+function storeEmails(host, items) {
+  return locked(async () => {
+    const { emails } = await getAll();
+    const known = new Set(emails.filter((e) => e.host === host).map((e) => e.email));
+    const at = Date.now();
+    const fresh = items.filter((i) => !known.has(i.email)).map((i) => ({ host, email: i.email, pageUrl: i.pageUrl, at }));
+    if (fresh.length) await save({ emails: [...emails, ...fresh] });
+    return fresh.length;
+  });
 }
 
 // Records a domain that stopped at a CAPTCHA. One row per domain; the newest visit wins.
-async function storeCaptchaDomain(host, pageUrl) {
-  const { captchaDomains } = await getAll();
-  await save({ captchaDomains: [...captchaDomains.filter((c) => c.host !== host), { host, pageUrl, at: Date.now() }] });
+function storeCaptchaDomain(host, pageUrl) {
+  return locked(async () => {
+    const { captchaDomains } = await getAll();
+    await save({ captchaDomains: [...captchaDomains.filter((c) => c.host !== host), { host, pageUrl, at: Date.now() }] });
+  });
 }
 
 // Saves a text file under Downloads/FillHero, replacing the previous version.
@@ -335,6 +382,7 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
       continue;
     }
     if (scan.captcha) {
+      token.formSeen = true;
       // Never submit behind a CAPTCHA, but still fill the form so the review tab is ready.
       const pick = pickForm(scan);
       let note = "no form found";
@@ -350,6 +398,7 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
 
     const pick = pickForm(scan);
     if (!pick) continue;
+    token.formSeen = true; // a form that could be used (high or low confidence)
     if (pick.score.level !== "high") {
       fallback = fallback ?? { pageUrl, reason: pick.score.reason };
       continue;
@@ -360,11 +409,10 @@ async function processDomain(tabId, entry, profile, dryRun, token) {
   // A form exists but is low confidence: queued for review, no emails needed.
   if (fallback) return { status: "queued", reason: fallback.reason, pageUrl: fallback.pageUrl };
 
-  // No usable form at all: keep the email addresses for the email export.
-  // No usable form on the site: its email addresses are kept for the export.
-  if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url, noForm: true };
+  // No usable form on the site: its email addresses are kept for the export (see runEntryBody).
+  if (scanError) return { status: "queued", reason: `scan-error: ${scanError}`, pageUrl: entry.url };
   const tried = attempts.length ? attempts.join(" | ") : "no contact links found";
-  return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url, noForm: true };
+  return { status: "queued", reason: `no-usable-form (${tried})`, pageUrl: entry.url };
 }
 
 async function collectLinksSafe(tabId, url) {
@@ -386,38 +434,68 @@ async function submitPick({ tabId, pick, pageUrl, profile, dryRun, host, lang, t
 
   if (dryRun) return { status: "skipped", reason: `dry-run; ${summary}`, pageUrl };
 
-  // Rate limit gate: wait, never skip.
-  for (;;) {
-    if (stopRequested) return { status: "skipped", reason: "stopped", pageUrl };
-    if (token.aborted) return { status: "skipped", reason: "timed out", pageUrl };
-    const state = await getAll();
-    const gate = canSubmit(state, Date.now(), LIMITS);
-    if (gate.ok) break;
-    if (gate.reason === "daily-cap") return { status: "skipped", reason: "daily-cap", pageUrl };
-    await new Promise((r) => setTimeout(r, Math.min(gate.waitMs, 5000)));
-  }
-
   await new Promise((r) => setTimeout(r, 300 + Math.random() * 400)); // brief human-like pause
   if (token.aborted || stopRequested) return { status: "skipped", reason: stopRequested ? "stopped" : "timed out", pageUrl };
-  const before = (await chrome.tabs.get(tabId)).url;
-  let result;
+
+  // Rate limit gate: wait for a free slot, never skip. The slot is taken under the lock, so
+  // domains working at the same time cannot both pass the gap check.
+  token.waiting = true;
   try {
-    result = await toContent(tabId, { type: "submit", formIndex: pick.form.index }, SUBMIT_TIMEOUT_MS);
+    for (;;) {
+      if (stopRequested) return { status: "skipped", reason: "stopped", pageUrl };
+      if (token.aborted) return { status: "skipped", reason: "timed out", pageUrl };
+      const gate = await locked(async () => {
+        const state = await getAll();
+        const now = Date.now();
+        const result = canSubmit(state, now, LIMITS);
+        if (result.ok) await save(nextState(state, now)); // counted now, so the next domain waits its turn
+        return result;
+      });
+      if (gate.ok) break;
+      if (gate.reason === "daily-cap") return { status: "skipped", reason: "daily-cap", pageUrl };
+      await new Promise((r) => setTimeout(r, Math.min(gate.waitMs, 5000)));
+    }
+  } finally {
+    token.waiting = false;
+  }
+
+  const before = (await chrome.tabs.get(tabId)).url;
+  let verdict;
+  let gone = false; // the page went away while submitting (a full page post does this)
+  try {
+    verdict = await toContent(tabId, { type: "submit", formIndex: pick.form.index }, SUBMIT_TIMEOUT_MS);
   } catch (err) {
-    // A timeout means we cannot tell whether the form went through, so it is never a clean send.
-    // A navigation during submit usually means it did.
-    result = isTimeout(err) ? { outcome: "unknown" } : { outcome: "confirmed" };
+    gone = true;
+    verdict = { outcome: "unverified", reason: isTimeout(err) ? "no answer from the page" : "the page changed during the submit" };
   }
   // The address is read from the browser, not the page, so it works even when the page is stuck.
   const after = await withTimeout(chrome.tabs.get(tabId), STEP_TIMEOUT_MS, "read address").then((t) => t.url).catch(() => before);
-  const outcome = result?.outcome === "confirmed" || after !== before ? "sent" : "sent?";
+  if (after !== before) gone = true;
+  // Not yet confirmed, but the page moved on: read the confirmation from the page it landed on.
+  if (verdict?.outcome !== "confirmed" && verdict?.outcome !== "rejected" && gone) {
+    verdict = await confirmOnLanding(tabId, pick.form.index, before).catch(() => verdict);
+  }
 
-  const state = await getAll();
-  await save({
-    ...nextState(state, Date.now()),
-    sentHosts: [...new Set([...state.sentHosts, host])],
-  });
-  return { status: outcome, reason: summary, pageUrl };
+  // Only a confirmed submit is "sent". A refused one goes back to the review queue, and an
+  // unconfirmed one is recorded as "sent?" so the domain is never submitted to again.
+  if (verdict?.outcome === "rejected") {
+    return { status: "queued", reason: `rejected: ${verdict.reason}; ${summary}`, pageUrl };
+  }
+  const confirmed = verdict?.outcome === "confirmed";
+  if (confirmed || verdict?.outcome === "unverified") {
+    await locked(async () => {
+      const state = await getAll();
+      await save({ sentHosts: [...new Set([...state.sentHosts, host])] });
+    });
+  }
+  if (confirmed) return { status: "sent", reason: `confirmed: ${verdict.reason}; ${summary}`, pageUrl };
+  return { status: "sent?", reason: `not confirmed: ${verdict?.reason ?? "no answer"}; ${summary}`, pageUrl };
+}
+
+// Reads the confirmation from the page the submit landed on, once that page has loaded.
+async function confirmOnLanding(tabId, formIndex, startUrl) {
+  await waitForLoad(tabId, 10000);
+  return toContent(tabId, { type: "confirm", formIndex, startUrl }, STEP_TIMEOUT_MS);
 }
 
 // ---------- licence ----------
@@ -498,35 +576,39 @@ async function licenceStatus() {
 // ---------- history watchdog ----------
 
 // Remembers the pages this extension opened, so they can be removed from history later.
-async function rememberVisit(url, finalUrl) {
-  const s = await chrome.storage.local.get(["visitedUrls"]);
-  const list = new Set(s.visitedUrls ?? []);
-  for (const u of [url, finalUrl]) if (u && /^https?:/.test(u)) list.add(u);
-  await save({ visitedUrls: [...list] });
+function rememberVisit(url, finalUrl) {
+  return locked(async () => {
+    const s = await chrome.storage.local.get(["visitedUrls"]);
+    const list = new Set(s.visitedUrls ?? []);
+    for (const u of [url, finalUrl]) if (u && /^https?:/.test(u)) list.add(u);
+    await save({ visitedUrls: [...list] });
+  });
 }
 
 // Counts one domain visit. Every HISTORY_CLEAR_EVERY visits, removes the pages this extension
 // visited from Chrome's history. Other history is left alone.
-async function countVisitAndMaybeClear() {
-  const s = await chrome.storage.local.get(["visitCount", "visitedUrls"]);
-  const count = (s.visitCount ?? 0) + 1;
-  if (count < HISTORY_CLEAR_EVERY) return save({ visitCount: count });
+function countVisitAndMaybeClear() {
+  return locked(async () => {
+    const s = await chrome.storage.local.get(["visitCount", "visitedUrls"]);
+    const count = (s.visitCount ?? 0) + 1;
+    if (count < HISTORY_CLEAR_EVERY) return save({ visitCount: count });
 
-  let removed = 0;
-  for (const url of s.visitedUrls ?? []) {
-    try {
-      await chrome.history.deleteUrl({ url });
-      removed++;
-    } catch {
-      // already gone, or the history permission is not granted; counted as not removed
+    let removed = 0;
+    for (const url of s.visitedUrls ?? []) {
+      try {
+        await chrome.history.deleteUrl({ url });
+        removed++;
+      } catch {
+        // already gone, or the history permission is not granted; counted as not removed
+      }
     }
-  }
-  await save({ visitCount: 0, visitedUrls: [] });
-  await logEntry({
-    host: "",
-    status: "history-cleared",
-    reason: `${count} domain visits; ${removed} of ${(s.visitedUrls ?? []).length} pages removed from browser history`,
-    pageUrl: "",
+    await save({ visitCount: 0, visitedUrls: [] });
+    await appendLog({
+      host: "",
+      status: "history-cleared",
+      reason: `${count} domain visits; ${removed} of ${(s.visitedUrls ?? []).length} pages removed from browser history`,
+      pageUrl: "",
+    });
   });
 }
 
@@ -540,7 +622,7 @@ async function closeAllManagedTabs() {
 // Shows a desktop notification with the results. Quietly skipped if notifications are blocked.
 async function notifyRunFinished(counts, stopped) {
   const title = stopped ? "Fill Hero: run stopped" : "Fill Hero: run finished";
-  const message = `${counts.sent} sent, ${counts.queued} queued for review, ${counts.failed} failed, ${counts.skipped} skipped.`;
+  const message = `${counts.sent} confirmed sent, ${counts.unconfirmed} not confirmed, ${counts.queued} queued for review, ${counts.failed} failed, ${counts.skipped} skipped.`;
   try {
     await chrome.notifications.create({ type: "basic", iconUrl: chrome.runtime.getURL("icon.png"), title, message });
   } catch {
@@ -548,68 +630,25 @@ async function notifyRunFinished(counts, stopped) {
   }
 }
 
-// One domain at a time. When the run ends, every tab it opened is closed and a notification is shown.
+// Up to WORKERS domains at once, each in its own tab. When the run ends, every tab it opened
+// is closed and a notification is shown.
 async function runLoop(domains) {
   running = true;
   stopRequested = false;
   const { dryRun } = await getAll();
-  const counts = { sent: 0, queued: 0, failed: 0, skipped: 0 };
-  try {
-    for (const entry of domains) {
-      if (stopRequested) break;
-      if (!entry.ok) {
-        await logEntry({ host: entry.input, status: "failed", reason: entry.reason, pageUrl: "" });
+  const counts = { sent: 0, unconfirmed: 0, queued: 0, failed: 0, skipped: 0 };
+  let next = 0;
+  const worker = async () => {
+    while (!stopRequested && next < domains.length) {
+      const entry = domains[next++];
+      await runEntry(entry, dryRun, counts).catch(async (err) => {
         counts.failed++;
-        continue;
-      }
-      const { log, profile, sentHosts } = await getAll();
-      if (hasSent(log, entry.host) || sentHosts.includes(entry.host)) {
-        await logEntry({ host: entry.host, status: "skipped", reason: "already-sent", pageUrl: entry.url });
-        counts.skipped++;
-        continue;
-      }
-
-      const tab = await openTab("about:blank", dryRun);
-      currentTabId = tab.id;
-      const token = { aborted: false, emails: new Map() }; // email -> page it was found on
-      let keepOpen = dryRun;
-      let siteHasNoForm = false; // set only when the site is known to have no usable form
-      try {
-        const r = await withTimeout(processDomain(tab.id, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`).catch((err) => {
-          token.aborted = true; // a late submit from the abandoned attempt is refused
-          throw err;
-        });
-        siteHasNoForm = r.noForm === true;
-        if (r.status === "queued") {
-          const reason = r.reason;
-          if (reason.startsWith("captcha")) await storeCaptchaDomain(entry.host, r.pageUrl);
-          await queueEntry({ host: entry.host, url: entry.url, reason, pageUrl: r.pageUrl });
-          counts.queued++;
-        } else {
-          await logEntry({ host: entry.host, status: r.status, reason: r.reason, pageUrl: r.pageUrl });
-          if (r.status.startsWith("sent")) counts.sent++;
-          else if (r.status === "failed") counts.failed++;
-          else counts.skipped++;
-        }
-      } catch (err) {
-        keepOpen = false; // a stuck or stopped tab is never left open
-        const reason = stopRequested
-          ? "stopped by the user"
-          : isTimeout(err)
-            ? `timed out after ${DOMAIN_TIMEOUT_MS / 1000} s; nothing more was done here`
-            : String(err?.message ?? err);
-        await logEntry({ host: entry.host, status: stopRequested ? "skipped" : "failed", reason, pageUrl: entry.url });
-        if (stopRequested) counts.skipped++;
-        else counts.failed++;
-      } finally {
-        // Addresses are kept only for sites with no usable form.
-        const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
-        if (siteHasNoForm && found.length) await storeEmails(entry.host, found).catch(() => {});
-        currentTabId = null;
-        if (!keepOpen) await closeTab(tab.id);
-        await countVisitAndMaybeClear().catch(() => {});
-      }
+        await logEntry({ host: entry.host ?? entry.input, status: "failed", reason: String(err?.message ?? err), pageUrl: "" }).catch(() => {});
+      });
     }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(WORKERS, domains.length) }, worker));
   } finally {
     const stopped = stopRequested;
     running = false;
@@ -620,6 +659,80 @@ async function runLoop(domains) {
     // The run is over: close every tab it opened, then say so.
     await closeAllManagedTabs().catch(() => {});
     await notifyRunFinished(counts, stopped);
+  }
+}
+
+// Hosts being worked on right now. The same host listed twice must never be worked on at once.
+const hostsInProgress = new Set();
+
+// Works one domain in its own tab, and records the result in counts.
+async function runEntry(entry, dryRun, counts) {
+  if (entry.ok && hostsInProgress.has(entry.host)) {
+    await logEntry({ host: entry.host, status: "skipped", reason: "duplicate-in-run", pageUrl: entry.url });
+    counts.skipped++;
+    return;
+  }
+  if (!entry.ok) return runEntryBody(entry, dryRun, counts);
+  hostsInProgress.add(entry.host);
+  try {
+    return await runEntryBody(entry, dryRun, counts);
+  } finally {
+    hostsInProgress.delete(entry.host);
+  }
+}
+
+async function runEntryBody(entry, dryRun, counts) {
+  if (!entry.ok) {
+    await logEntry({ host: entry.input, status: "failed", reason: entry.reason, pageUrl: "" });
+    counts.failed++;
+    return;
+  }
+  const { log, profile, sentHosts } = await getAll();
+  if (hasSent(log, entry.host) || sentHosts.includes(entry.host)) {
+    await logEntry({ host: entry.host, status: "skipped", reason: "already-sent", pageUrl: entry.url });
+    counts.skipped++;
+    return;
+  }
+
+  const tab = await openTab("about:blank", dryRun, true);
+  // emails: email -> page it was found on. formSeen: a form (or CAPTCHA) was found on one of the pages.
+  const token = { aborted: false, waiting: false, emails: new Map(), formSeen: false };
+  let keepOpen = dryRun;
+  try {
+    const r = await withDeadline(processDomain(tab.id, entry, profile, dryRun, token), DOMAIN_TIMEOUT_MS, `domain ${entry.host}`, token).catch((err) => {
+      token.aborted = true; // a late submit from the abandoned attempt is refused
+      throw err;
+    });
+    if (r.status === "queued") {
+      const reason = r.reason;
+      if (reason.startsWith("captcha")) await storeCaptchaDomain(entry.host, r.pageUrl);
+      await queueEntry({ host: entry.host, url: entry.url, reason, pageUrl: r.pageUrl });
+      counts.queued++;
+    } else {
+      await logEntry({ host: entry.host, status: r.status, reason: r.reason, pageUrl: r.pageUrl });
+      if (r.status === "sent") counts.sent++;
+      else if (r.status === "sent?") counts.unconfirmed++;
+      else if (r.status === "failed") counts.failed++;
+      else counts.skipped++;
+    }
+  } catch (err) {
+    keepOpen = false; // a stuck or stopped tab is never left open
+    const reason = stopRequested
+      ? "stopped by the user"
+      : isTimeout(err)
+        ? `timed out after ${DOMAIN_TIMEOUT_MS / 1000} s; nothing more was done here`
+        : String(err?.message ?? err);
+    await logEntry({ host: entry.host, status: stopRequested ? "skipped" : "failed", reason, pageUrl: entry.url });
+    if (stopRequested) counts.skipped++;
+    else counts.failed++;
+  } finally {
+    // Addresses are kept only for sites where no form was found. This holds even when the domain
+    // timed out or failed part-way: the addresses were read from the pages it did reach.
+    const found = [...token.emails].map(([email, pageUrl]) => ({ email, pageUrl }));
+    if (!token.formSeen && found.length) await storeEmails(entry.host, found).catch(() => {});
+    activeTabs.delete(tab.id);
+    if (!keepOpen) await closeTab(tab.id);
+    await countVisitAndMaybeClear().catch(() => {});
   }
 }
 
@@ -687,8 +800,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       case "stop":
         stopRequested = true;
-        // Closing the open tab cancels a page step that is waiting, so Stop takes effect at once.
-        if (currentTabId !== null) await closeTab(currentTabId);
+        // Closing the open tabs cancels page steps that are waiting, so Stop takes effect at once.
+        for (const id of [...activeTabs]) await closeTab(id);
         return sendResponse({ ok: true });
       case "approveQueued": {
         if (running) return sendResponse({ ok: false, reason: "stop-the-run-first" });

@@ -309,25 +309,45 @@ export class Engine {
     await sleep(300 + Math.random() * 400); // brief human-like pause
     if (token.aborted || this.stopRequested) return { status: "skipped", reason: this.stopRequested ? "stopped" : "timed out", pageUrl };
     const before = page.url();
-    let result;
+    let verdict;
+    let gone = false; // the page went away while submitting (a full page post does this)
     try {
       await this.ensureContent(page);
-      result = await withTimeout(page.evaluate(([i, url]) => window.__fillHero.submit(i, url), [pick.form.index, before]), SUBMIT_TIMEOUT_MS, "submit form");
+      verdict = await withTimeout(page.evaluate(([i, url]) => window.__fillHero.submit(i, url), [pick.form.index, before]), SUBMIT_TIMEOUT_MS, "submit form");
     } catch (err) {
-      // A timeout means we cannot tell whether the form went through, so it is never reported as a clean send.
-      // A navigation during submit usually means it did.
-      result = isTimeout(err) ? { outcome: "unknown" } : { outcome: "confirmed" };
+      gone = true;
+      verdict = { outcome: "unverified", reason: isTimeout(err) ? "no answer from the page" : "the page changed during the submit" };
     }
-    const after = page.url();
-    const outcome = result?.outcome === "confirmed" || after !== before ? "sent" : "sent?";
-    await this.show(host, outcome === "sent" ? "Submitted, confirmation seen" : "Submitted, no confirmation seen", page);
+    if (page.url() !== before) gone = true;
+    // Not yet confirmed, but the page moved on: read the confirmation from the page it landed on.
+    if (verdict?.outcome !== "confirmed" && verdict?.outcome !== "rejected" && gone) {
+      verdict = await this.confirmOnLanding(page, pick.form.index, before).catch(() => verdict);
+    }
 
+    // Only a confirmed submit is "sent". A refused one goes back to the review queue, and an
+    // unconfirmed one is recorded as "sent?" so the domain is never submitted to again.
+    if (verdict?.outcome === "rejected") {
+      await this.show(host, `Submit refused: ${verdict.reason}`, page);
+      return { status: "queued", reason: `rejected: ${verdict.reason}; ${summary}`, pageUrl };
+    }
+    const confirmed = verdict?.outcome === "confirmed";
+    await this.show(host, confirmed ? "Submitted, confirmation seen" : "Submitted, no confirmation seen", page);
+
+    // Anything that may have reached the site counts against the gap and the daily cap, and is never submitted to again.
     const state = this.store.get();
     this.store.set({
       ...nextState(state, Date.now()),
       sentHosts: [...new Set([...state.sentHosts, host])],
     });
-    return { status: outcome, reason: summary, pageUrl };
+    if (confirmed) return { status: "sent", reason: `confirmed: ${verdict.reason}; ${summary}`, pageUrl };
+    return { status: "sent?", reason: `not confirmed: ${verdict?.reason ?? "no answer"}; ${summary}`, pageUrl };
+  }
+
+  // Reads the confirmation from the page a submit landed on, once that page has loaded.
+  async confirmOnLanding(page, formIndex, startUrl) {
+    await withTimeout(page.waitForLoadState("load"), 10000, "landing page").catch(() => {});
+    await this.ensureContent(page);
+    return withTimeout(page.evaluate(([i, url]) => window.__fillHero.confirm(i, url), [formIndex, startUrl]), STEP_TIMEOUT_MS, "read confirmation");
   }
 
   // ---------- run loop ----------
